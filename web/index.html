@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111526">
+  <title>装备合成原型 · 试玩版</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">✦</span><div><strong>装备合成原型</strong><small>战斗 · 掉落 · 合成</small></div></div>
+      <button id="reset-button" class="icon-button" title="重新开始">↺</button>
+    </header>
+    <div id="resource-bar" class="resource-bar"></div>
+    <main id="screen"></main>
+    <nav class="bottom-nav" aria-label="游戏页面">
+      <button data-tab="adventure" class="active"><span>⚔</span>冒险</button>
+      <button data-tab="equipment"><span>♜</span>装备</button>
+      <button data-tab="synthesis"><span>✧</span>合成</button>
+    </nav>
+    <div id="toast" role="status" aria-live="polite"></div>
+  </div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "merge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "装备合成原型：Cocos Creator 3.8 游戏工程",
+  "creator": {
+    "version": "3.8.8"
+  },
+  "scripts": {
+    "build:web": "node tools/build-web.mjs",
+    "export:cocos-web": "node tools/export-cocos-web.mjs",
+    "test": "npm run build:web && node --test tests/*.test.mjs"
+  },
+  "uuid": "0be02508-345e-4d64-9e62-91cd775d9bdf"
+}
