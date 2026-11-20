@@ -1,0 +1,250 @@
+import {
+  _decorator, Component, Node, UITransform, Graphics, Label, Color,
+  Sprite, SpriteFrame, resources, Layers, Vec3, sys, isValid, Camera,
+} from 'cc';
+import {
+  SLOTS, SLOT_NAMES, RARITIES, newGame, restoreGame, heroStats,
+  itemStats, equip, toggleLock, synthesize, enhance, battle,
+} from './core/game-core';
+
+const { ccclass } = _decorator;
+const SAVE_KEY = 'starforge-prototype-v1';
+const C = {
+  bg: new Color(12, 18, 34), panel: new Color(29, 39, 63),
+  panelLight: new Color(39, 53, 82), line: new Color(79, 97, 132),
+  ink: new Color(246, 242, 224), muted: new Color(172, 187, 207),
+  gold: new Color(245, 196, 117), cyan: new Color(111, 227, 232),
+  green: new Color(105, 223, 174), red: new Color(255, 129, 133),
+};
+
+/** 把与网页试玩共用的规则呈现在 Cocos 画布上。挂到 420×840 的 Canvas 节点。 */
+@ccclass('StarforgeGame')
+export class StarforgeGame extends Component {
+  private game: any = null;
+  private tab: 'adventure' | 'equipment' | 'synthesis' = 'adventure';
+  private stage = 1;
+  private selectedItem: string | null = null;
+  private selectedRarity = 'common';
+  private materials: string[] = [];
+  private bagPage = 0;
+  private status = '点击挑战，获得装备并开始合成。';
+  private frames: Record<string, SpriteFrame> = {};
+
+  onLoad() {
+    try {
+      this.game = restoreGame(JSON.parse(sys.localStorage.getItem(SAVE_KEY) || 'null')) || newGame();
+    } catch { this.game = newGame(); }
+    this.stage = this.game.stageUnlocked;
+    this.render();
+    for (const name of ['hero-sky-knight', 'void-beast', 'battle-observatory']) {
+      resources.load(`art/${name}/spriteFrame`, SpriteFrame, (error, frame) => {
+        if (error || !frame || !isValid(this.node)) return;
+        this.frames[name] = frame;
+        this.render();
+      });
+    }
+  }
+
+  private save() {
+    try { sys.localStorage.setItem(SAVE_KEY, JSON.stringify(this.game)); }
+    catch { this.status = '当前设备无法保存进度'; }
+  }
+
+  private box(parent: Node, name: string, x: number, y: number, w: number, h: number,
+    fill: Color, outline?: Color): Node {
+    const node = new Node(name);
+    node.layer = Layers.Enum.UI_2D;
+    parent.addChild(node);
+    node.setPosition(new Vec3(x, y));
+    node.addComponent(UITransform).setContentSize(w, h);
+    const graphics = node.addComponent(Graphics);
+    graphics.fillColor = fill;
+    graphics.roundRect(-w / 2, -h / 2, w, h, 12);
+    graphics.fill();
+    if (outline) {
+      graphics.strokeColor = outline;
+      graphics.lineWidth = 1;
+      graphics.roundRect(-w / 2, -h / 2, w, h, 12);
+      graphics.stroke();
+    }
+    return node;
+  }
+
+  private text(parent: Node, value: string, x: number, y: number, w: number, h: number,
+    size = 16, color = C.ink): Node {
+    const node = new Node('Text');
+    node.layer = Layers.Enum.UI_2D;
+    parent.addChild(node);
+    node.setPosition(new Vec3(x, y));
+    node.addComponent(UITransform).setContentSize(w, h);
+    const label = node.addComponent(Label);
+    label.string = value;
+    label.fontSize = size;
+    label.lineHeight = size + 5;
+    label.color = color;
+    label.horizontalAlign = Label.HorizontalAlign.CENTER;
+    label.verticalAlign = Label.VerticalAlign.CENTER;
+    label.overflow = Label.Overflow.SHRINK;
+    return node;
+  }
+
+  private button(value: string, x: number, y: number, w: number, h: number,
+    callback: () => void, prominent = false): Node {
+    const node = this.box(this.node, `Button-${value}`, x, y, w, h,
+      prominent ? C.gold : C.panelLight, prominent ? C.gold : C.line);
+    this.text(node, value, 0, 0, w - 8, h - 4, 15, prominent ? C.bg : C.ink);
+    node.on(Node.EventType.TOUCH_END, callback, this);
+    return node;
+  }
+
+  private picture(name: string, x: number, y: number, w: number, h: number) {
+    const frame = this.frames[name];
+    if (!frame) return;
+    const node = new Node(name);
+    node.layer = Layers.Enum.UI_2D;
+    this.node.addChild(node);
+    node.setPosition(new Vec3(x, y));
+    node.addComponent(UITransform).setContentSize(w, h);
+    const sprite = node.addComponent(Sprite);
+    sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+    sprite.spriteFrame = frame;
+    node.getComponent(UITransform)!.setContentSize(w, h);
+  }
+
+  private action(operation: () => void) {
+    try { operation(); this.save(); }
+    catch (error: any) { this.status = error?.message || '操作失败'; }
+    this.render();
+  }
+
+  private render() {
+    for (const child of [...this.node.children]) {
+      if (!child.getComponent(Camera)) child.destroy();
+    }
+    this.box(this.node, 'Backdrop', 0, 0, 420, 840, C.bg);
+    this.box(this.node, 'Header', 0, 375, 420, 85, C.panel, C.line);
+    this.text(this.node, '装备合成原型', -85, 385, 230, 40, 24, C.gold);
+    this.text(this.node, `◈ ${this.game.gold}    ⌁ ${this.game.ore}    ϟ ${this.game.energy}`,
+      10, 343, 390, 26, 14, C.muted);
+    if (this.tab === 'adventure') this.renderAdventure();
+    if (this.tab === 'equipment') this.renderEquipment();
+    if (this.tab === 'synthesis') this.renderSynthesis();
+    this.box(this.node, 'Nav', 0, -365, 420, 72, C.panel, C.line);
+    this.button('冒险', -135, -365, 116, 46, () => { this.tab = 'adventure'; this.render(); }, this.tab === 'adventure');
+    this.button('装备', 0, -365, 116, 46, () => { this.tab = 'equipment'; this.render(); }, this.tab === 'equipment');
+    this.button('合成', 135, -365, 116, 46, () => { this.tab = 'synthesis'; this.render(); }, this.tab === 'synthesis');
+  }
+
+  private renderAdventure() {
+    const h = heroStats(this.game);
+    this.box(this.node, 'Battle', 0, 95, 396, 378, C.panel, C.line);
+    this.picture('battle-observatory', 0, 95, 394, 375);
+    this.picture('hero-sky-knight', -92, 52, 178, 250);
+    this.picture('void-beast', 100, 80, 164, 174);
+    this.text(this.node, `第 ${this.stage} 关  ·  试炼场`, 0, 249, 360, 35, 21, C.gold);
+    this.text(this.node, `战力 ${h.power}     攻击 ${h.attack}     生命 ${h.health}`,
+      0, -72, 360, 34, 14, C.ink);
+    this.button('‹', -115, -125, 50, 42, () => {
+      this.stage = Math.max(1, this.stage - 1); this.render();
+    });
+    this.text(this.node, `已解锁 ${this.game.stageUnlocked}/10`, 0, -125, 150, 40, 15);
+    this.button('›', 115, -125, 50, 42, () => {
+      this.stage = Math.min(this.game.stageUnlocked, this.stage + 1); this.render();
+    });
+    this.button('开始挑战', 0, -194, 250, 55, () => this.action(() => {
+      const result = battle(this.game, this.stage);
+      this.status = result.won
+        ? `通关！金币 +${result.rewards.gold}，铁矿 +${result.rewards.ore}，装备 +2`
+        : `挑战失败，获得 ${result.rewards.gold} 金币；强化后再试。`;
+      if (result.won) this.stage = Math.min(10, this.stage + 1);
+    }), true);
+    this.text(this.node, this.status, 0, -259, 380, 65, 15, C.muted);
+  }
+
+  private renderEquipment() {
+    this.text(this.node, `装备栏 · 战力 ${heroStats(this.game).power}`, 0, 293, 380, 30, 19, C.gold);
+    SLOTS.forEach((slot: string, index: number) => {
+      const item = this.game.equipped[slot];
+      const x = -130 + (index % 3) * 130;
+      const y = 223 - Math.floor(index / 3) * 72;
+      this.button(`${SLOT_NAMES[slot]}\n${item ? `${item.name} +${item.level}` : '空位'}`,
+        x, y, 120, 62, () => { this.selectedItem = item?.id || null; this.render(); });
+    });
+    this.text(this.node, `背包 ${this.game.bag.length}/100`, 0, 91, 340, 29, 18, C.gold);
+    const page = this.game.bag.slice(this.bagPage * 9, this.bagPage * 9 + 9);
+    page.forEach((item: any, index: number) => {
+      const x = -130 + (index % 3) * 130;
+      const y = 38 - Math.floor(index / 3) * 58;
+      this.button(`${item.locked ? '🔒' : ''}${item.name}\n${RARITIES.find(r => r.id === item.rarity)?.name}`,
+        x, y, 121, 52, () => { this.selectedItem = item.id; this.render(); });
+    });
+    this.button('‹', -140, -150, 44, 32, () => { this.bagPage = Math.max(0, this.bagPage - 1); this.render(); });
+    this.text(this.node, `${this.bagPage + 1} / ${Math.max(1, Math.ceil(this.game.bag.length / 9))}`,
+      0, -150, 100, 30, 13, C.muted);
+    this.button('›', 140, -150, 44, 32, () => {
+      this.bagPage = Math.min(Math.max(0, Math.ceil(this.game.bag.length / 9) - 1), this.bagPage + 1);
+      this.render();
+    });
+    const bagItem = this.game.bag.find((item: any) => item.id === this.selectedItem);
+    const equippedSlot = SLOTS.find((slot: string) => this.game.equipped[slot]?.id === this.selectedItem);
+    const item = bagItem || (equippedSlot ? this.game.equipped[equippedSlot] : null);
+    if (item) {
+      const s = itemStats(item);
+      this.text(this.node, `${item.name} +${item.level}  ·  攻 ${s.attack} / 生 ${s.health} / 防 ${s.defense}`,
+        0, -196, 390, 35, 13, C.ink);
+      if (bagItem) {
+        this.button('穿戴', -86, -246, 150, 42, () => this.action(() => {
+          equip(this.game, bagItem.id); this.status = '穿戴成功';
+        }), true);
+        this.button(item.locked ? '解锁' : '锁定', 86, -246, 150, 42, () => this.action(() => {
+          toggleLock(this.game, bagItem.id);
+        }));
+      } else {
+        this.button('强化 +1', 0, -246, 220, 42, () => this.action(() => {
+          enhance(this.game, equippedSlot!); this.status = `${item.name} 强化成功`;
+        }), true);
+      }
+    }
+    this.text(this.node, this.status, 0, -303, 385, 40, 13, C.muted);
+  }
+
+  private renderSynthesis() {
+    this.text(this.node, '5 件同品质装备 → 1 件更高品质', 0, 285, 390, 42, 18, C.gold);
+    for (let rank = 0; rank < 4; rank++) {
+      const rarity = RARITIES[rank];
+      this.button(rarity.name, -145 + rank * 96, 226, 88, 39, () => {
+        this.selectedRarity = rarity.id; this.materials = []; this.bagPage = 0; this.render();
+      }, this.selectedRarity === rarity.id);
+    }
+    const candidates = this.game.bag.filter((item: any) => item.rarity === this.selectedRarity);
+    candidates.slice(this.bagPage * 9, this.bagPage * 9 + 9).forEach((item: any, index: number) => {
+      const x = -130 + (index % 3) * 130;
+      const y = 153 - Math.floor(index / 3) * 67;
+      const selected = this.materials.includes(item.id);
+      this.button(`${selected ? '✓ ' : ''}${item.name}\n${item.locked ? '已锁定' : SLOT_NAMES[item.slot]}`,
+        x, y, 121, 61, () => {
+          if (item.locked) { this.status = '先到装备页解锁'; this.render(); return; }
+          this.materials = selected
+            ? this.materials.filter(id => id !== item.id)
+            : this.materials.length < 5 ? [...this.materials, item.id] : this.materials;
+          this.render();
+        }, selected);
+    });
+    this.button('‹', -140, -79, 44, 32, () => { this.bagPage = Math.max(0, this.bagPage - 1); this.render(); });
+    this.text(this.node, `材料 ${this.materials.length}/5`, 0, -79, 150, 30, 15, C.ink);
+    this.button('›', 140, -79, 44, 32, () => {
+      this.bagPage = Math.min(Math.max(0, Math.ceil(candidates.length / 9) - 1), this.bagPage + 1);
+      this.render();
+    });
+    this.button('自动选择', -87, -157, 160, 45, () => {
+      this.materials = candidates.filter((item: any) => !item.locked).slice(0, 5).map((item: any) => item.id);
+      this.render();
+    });
+    this.button('合成装备', 87, -157, 160, 45, () => this.action(() => {
+      const item = synthesize(this.game, this.materials);
+      this.materials = []; this.selectedItem = item.id; this.tab = 'equipment';
+      this.status = `合成成功：${item.name}`;
+    }), true);
+    this.text(this.node, this.status, 0, -245, 385, 60, 14, C.muted);
+  }
+}
