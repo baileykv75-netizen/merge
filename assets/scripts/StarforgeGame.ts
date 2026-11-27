@@ -11,6 +11,7 @@ import {
   GEM_TYPES, gemTotal, mergeGems, drillSocket, mountGem, unmountGem,
   SKILLS, skillPoints, learnSkill, assignSkill, activateLoadout, resetSkills,
   CHAPTERS, STAGES, MAX_STAGE, MILESTONES, stageInfo, claimMilestone,
+  TOWER_CAP, TOWER_CURSES, MANTLE_PASSIVES, towerInfo, selectTowerCurse, rerollTowerCurses, startTower, mantleQuote, upgradeMantle,
 } from './core/game-core';
 
 const { ccclass } = _decorator;
@@ -51,6 +52,8 @@ export class StarforgeGame extends Component {
   private selectedSkill = 'slash';
   private chapterOpen = false;
   private chapterIndex = 0;
+  private towerOpen = false;
+  private mantleOpen = false;
 
   update(dt: number) {
     const fight = this.game?.encounter;
@@ -72,6 +75,7 @@ export class StarforgeGame extends Component {
     }
     this.tab = tab; this.bagPage = 0; this.forgeOpen = false; this.dungeonOpen = false; this.gemsOpen = false; this.skillsOpen = false;
     this.chapterOpen = false;
+    this.towerOpen = false; this.mantleOpen = false;
     syncTime(this.game); this.render();
   }
 
@@ -85,6 +89,7 @@ export class StarforgeGame extends Component {
       this.dungeonDifficulty = this.game.encounter.result.difficulty;
       this.stage = this.game.stageUnlocked;
     }
+    if(this.game.encounter?.result.kind==='tower')this.stage=this.game.stageUnlocked;
     if (this.game.pendingForge) { this.tab = 'equipment'; this.forgeOpen = true; this.selectedItem = this.game.pendingForge.itemId; }
     syncTime(this.game);
     this.save();
@@ -200,12 +205,14 @@ export class StarforgeGame extends Component {
   }
 
   private renderAdventure() {
+    if (this.towerOpen && !this.game.encounter) { this.renderTower(); return; }
     if (this.chapterOpen && !this.game.encounter) { this.renderChapters(); return; }
     if (this.dungeonOpen && !this.game.encounter) { this.renderDungeon(); return; }
     const info = stageInfo(this.stage);
     const h = heroStats(this.game);
     const fight = encounterView(this.game);
     const dungeon = fight?.result.kind === 'dungeon' ? DUNGEONS.find(d => d.id === fight.result.dungeonId) : null;
+    const tower = fight?.result.kind === 'tower';
     const running = fight && !fight.done;
     if (!fight) {
       this.text(this.node, info.chapterName, -55, 294,280,34,18,C.gold);
@@ -213,6 +220,7 @@ export class StarforgeGame extends Component {
     }
     this.box(this.node, 'Battle', 0, 95, 396, 378, C.panel, C.line);
     this.picture('battle-observatory', 0, 95, 394, 375);
+    if(this.game.mantleLevel)this.drawMantle(-115,30,0.75);
     const hero = this.picture('hero-sky-knight', -92, 52, 178, 250);
     const enemy = this.picture('void-beast', 100, 80, 164, 174);
     if (Object.keys(this.frames).length < 3) {
@@ -221,7 +229,7 @@ export class StarforgeGame extends Component {
       if (this.artErrors.size) this.button('重新加载画面', 0, 62, 210, 38, () => { this.loadArt(); this.render(); });
       else this.text(this.node, '首次进入需要下载画面，请稍候', 0, 64, 320, 36, 13, C.muted);
     }
-    this.text(this.node, `${dungeon ? dungeon.name : `${this.stage} · ${info.name}`}${fight ? ` · ${fight.wave}/${fight.result.waveCount} 波` : ''}`, 0, 249, 390, 35, 19, C.gold);
+    this.text(this.node, `${tower ? `试炼塔第 ${fight.result.floor} 层` : dungeon ? dungeon.name : `${this.stage} · ${info.name}`}${fight ? ` · ${fight.wave}/${fight.result.waveCount} 波` : ''}`, 0, 249, 390, 35, 19, C.gold);
     this.text(this.node, fight ? `${fight.boss?'首领 · ':''}${fight.enemyName}` : info.foes.map((e:any)=>e.name).join(' → '),0,210,380,36,13,C.ink);
     const event = fight?.last;
     if (running && event && ['hero', 'enemy'].includes(event.type)) {
@@ -236,28 +244,31 @@ export class StarforgeGame extends Component {
     if (running && event?.type === 'heal') this.text(this.node, `+${event.amount}`, -92, 178, 150, 40, 24, C.green);
     if (running && event?.type === 'enemyHeal') this.text(this.node, `+${event.amount}`, 100, 178, 150, 40, 24, C.green);
     this.healthBar(-100, -48, fight?.heroHp ?? h.health, fight?.result.maxHeroHp ?? h.health, C.green);
+    if(fight?.heroShield)this.text(this.node,`羽护 · ${fight.heroShield}`,-100,-4,170,23,12,C.cyan);
     this.healthBar(100, -48, fight?.enemyHp ?? info.foes[0].maxHp, fight?.enemyMaxHp ?? info.foes[0].maxHp, C.red);
     const notice = !fight ? `战力 ${h.power} · 攻击 ${h.attack} · 生命 ${h.health}` : fight.done ?
-      (fight.result.won ? '挑战成功！战利品已放入背包' : '挑战失败 · 强化装备后再来') :
+      (fight.result.won ? '挑战成功！奖励已到账' : '挑战失败 · 强化装备后再来') :
       event?.type === 'hero' ? `${SKILLS.find(s=>s.id===event.skill)?.name || (event.skill ? '强力突刺' : '普通攻击')}：${event.damage} 伤害` :
-      event?.type === 'enemy' ? `敌人${event.ability || '反击'}：${event.damage} 伤害` : event?.type === 'heal' ? `${event.skill ? '复苏' : '装备恢复'} +${event.amount} 生命` : event?.type === 'enemyHeal' ? `敌人恢复 ${event.amount} 生命${event.suppressed?' · 中毒减疗':''}` : event?.type === 'enemyStatus' ? event.text : event?.type === 'buff' ? `${SKILLS.find(s=>s.id===event.skill)?.name}发动` : '敌人出现，准备战斗';
+      event?.type === 'enemy' ? `敌人${event.ability || '反击'}：${event.damage} 伤害${event.absorbed?` · 护盾吸收 ${event.absorbed}`:''}` : event?.type === 'heal' ? `${event.source || (event.skill ? '复苏' : '装备恢复')} +${event.amount} 生命` : event?.type === 'enemyHeal' ? `敌人恢复 ${event.amount} 生命${event.suppressed?' · 中毒减疗':''}` : event?.type === 'enemyStatus' ? event.text : event?.type === 'buff' ? `${SKILLS.find(s=>s.id===event.skill)?.name}发动` : '敌人出现，准备战斗';
     this.text(this.node, notice, 0, -83, 380, 42, 13, fight?.done ? C.gold : C.ink);
     if (fight) {
       this.text(this.node, running ? (fight.cooldowns.length ? fight.cooldowns.map((c:any)=>`${SKILLS.find(s=>s.id===c.id)?.name} ${c.remaining ? c.remaining+'次行动' : '就绪'}`).join(' · ') : '自动战斗 · 技能独立冷却') :
-        (fight.result.rewards.gems?.length ? fight.result.rewards.gems.map((g: any) => `${GEM_TYPES.find(t=>t.id===g.type)?.name} Lv.${g.tier} ×${g.count}`).join('、') : `金币 +${fight.result.rewards.gold} · 铁矿 +${fight.result.rewards.ore} · 装备 +${fight.result.rewards.items.length}\n重铸石 +${fight.result.rewards.shards || 0} · 洗练尘 +${fight.result.rewards.dust || 0}`),
+        (tower ? `羽片 +${fight.result.rewards.feathers} · 塔印 +${fight.result.rewards.sigils}\n金币 +${fight.result.rewards.gold}` : fight.result.rewards.gems?.length ? fight.result.rewards.gems.map((g: any) => `${GEM_TYPES.find(t=>t.id===g.type)?.name} Lv.${g.tier} ×${g.count}`).join('、') : `金币 +${fight.result.rewards.gold} · 铁矿 +${fight.result.rewards.ore} · 装备 +${fight.result.rewards.items.length}\n重铸石 +${fight.result.rewards.shards || 0} · 洗练尘 +${fight.result.rewards.dust || 0}`),
         0, -135, 390, 42, 14, C.muted);
       if (running) {
         this.button(`战斗速度 ×${this.combatSpeed}`, 0, -198, 250, 50, () => { this.combatSpeed = this.combatSpeed === 1 ? 2 : 1; this.render(); });
       } else {
-        this.button(dungeon ? '返回副本' : fight.result.won ? '继续冒险' : '再次挑战', -93, -198, 175, 50, () => this.action(() => {
+        this.button(tower ? '返回试炼塔' : dungeon ? '返回副本' : fight.result.won ? '继续冒险' : '再次挑战', -93, -198, 175, 50, () => this.action(() => {
           const won = fight.result.won; closeEncounter(this.game);
+          if(tower){this.towerOpen=true;return;}
           if (dungeon) { this.dungeonOpen = true; return; }
           if (won) this.stage = Math.min(MAX_STAGE, this.stage + 1);
           else { startEncounter(this.game, this.stage); this.combatClock = 0; }
         }), true);
         this.button('查看装备', 102, -198, 175, 50, () => this.switchTab('equipment'));
       }
-      this.text(this.node, running ? (dungeon?.mechanic || fight.mechanic || '战斗中断后会保留进度，重新进入即可继续。') : dungeon ?
+      this.text(this.node, running ? (dungeon?.mechanic || fight.mechanic || '战斗中断后会保留进度，重新进入即可继续。') : tower ?
+        `本层推进 ${fight.result.progress}% · 历史最高 ${this.game.tower.best} 层\n羽片用于披风升级，每五层首领还会掉落塔印。` : dungeon ?
         (fight.result.won ? '已解锁本难度扫荡。挑战和扫荡共享每日次数。' : '本次已消耗次数和体力，提升装备后再挑战。') :
         `本次推进 ${fight.result.progress ?? (fight.result.won?100:0)}% · 历史最好 ${this.game.stageProgress[this.stage]||0}%\n${fight.result.rewards.items.map((item: any) => item.name).join('、') || '可回到章节页查看奖励和应对提示。'}`,
         0, -269, 380, 60, 14, C.muted);
@@ -273,7 +284,8 @@ export class StarforgeGame extends Component {
     this.button('开始挑战', 0, -194, 250, 55, () => this.action(() => {
       startEncounter(this.game, this.stage); this.combatClock = 0;
     }), true);
-    this.button('材料副本', 0, -263, 250, 44, () => { this.dungeonOpen = true; this.render(); });
+    this.button('材料副本', -98, -263, 184, 44, () => { this.dungeonOpen = true; this.render(); });
+    this.button('试炼塔',98,-263,184,44,()=>{this.towerOpen=true;this.status='';this.render();});
     this.text(this.node, this.status, 0, -309, 380, 32, 12, C.muted);
   }
 
@@ -464,6 +476,7 @@ export class StarforgeGame extends Component {
   }
 
   private renderCamp() {
+    if (this.mantleOpen) { this.renderMantle(); return; }
     if (this.skillsOpen) { this.renderSkills(); return; }
     const reward = idleReward(this.game);
     this.text(this.node, '营地 · 补给与训练', -55, 292, 280, 34, 21, C.gold);
@@ -482,7 +495,49 @@ export class StarforgeGame extends Component {
       this.button(`${t.name} ${Math.min(t.target, this.game.daily[t.id])}/${t.target}\n${claimed ? '已领取' : `${t.gold} 金币 + ${t.ore} 铁矿`}`, 0, -86 - i * 65, 380, 57,
         () => this.action(() => { claimDaily(this.game, t.id); this.status = '委托奖励已领取'; }), !claimed && this.game.daily[t.id] >= t.target);
     });
-    this.text(this.node, this.status, 0, -294, 385, 54, 14, C.muted);
+    this.button('背饰 · 羽织披风',0,-276,320,38,()=>{this.mantleOpen=true;this.status='';this.render();});
+    this.text(this.node, this.status, 0, -315, 385, 27, 12, C.muted);
+  }
+
+  private drawMantle(x:number,y:number,scale:number) {
+    const node=new Node('羽织披风');node.layer=Layers.Enum.UI_2D;this.node.addChild(node);node.setPosition(x,y);node.setScale(scale,scale,1);
+    node.addComponent(UITransform).setContentSize(150,140);const g=node.addComponent(Graphics);
+    g.fillColor=this.game.mantleLevel>=10?C.cyan:new Color(53,126,139);g.strokeColor=C.gold;g.lineWidth=2;
+    g.moveTo(-24,60);g.lineTo(-68,-50);g.lineTo(-35,-38);g.lineTo(0,-70);g.lineTo(35,-38);g.lineTo(68,-50);g.lineTo(24,60);g.close();g.fill();g.stroke();
+    g.moveTo(-24,60);g.lineTo(0,-70);g.lineTo(24,60);g.stroke();g.circle(0,48,8);g.fillColor=C.gold;g.fill();
+  }
+
+  private renderTower() {
+    const info=towerInfo(this.game),mods=info.modifiers;
+    this.text(this.node,info.complete?'试炼塔 · 本周已登顶':`试炼塔 · 第 ${info.floor}/${TOWER_CAP} 层`,0,294,390,40,22,C.gold);
+    this.text(this.node,`本周通过 ${info.cleared} 层 · 历史最高 ${info.best} 层`,0,253,390,30,16,C.ink);
+    this.text(this.node,`今日剩余 ${info.remaining}/5 次 · 不消耗体力 · 失败也计次`,0,218,390,32,13,C.muted);
+    this.text(this.node,info.foes.map((f:any)=>f.name).join(' → '),0,176,390,44,14,C.ink);
+    const names=TOWER_CURSES.map(c=>{const n=info.curses.filter((v:any)=>v.id===c.id).length;return n?`${c.name}×${n}`:'';}).filter(Boolean).join(' · ');
+    this.text(this.node,`累计诅咒：${names||'尚未选择'}\n敌伤 +${Math.round((mods.enemyAttack-1)*100)}% · 敌血 +${Math.round((mods.enemyHealth-1)*100)}%\n我方攻击 ${Math.round(mods.attack*100)}% · 治疗 ${Math.round(mods.healing*100)}% · 冷却 +${mods.cooldown}`,0,116,390,68,12,C.cyan);
+    this.text(this.node,info.needsChoice?'选择本区段诅咒，选定后不可更改':'本区段诅咒已固定，之前的诅咒仍生效',0,65,390,28,13,C.gold);
+    if(info.needsChoice)info.choices.forEach((c:any,i:number)=>this.button(`${c.name}\n${c.description}`,-98+i*196,5,186,90,()=>this.action(()=>{selectTowerCurse(this.game,c.id);this.status=`已选择${c.name}，本周持续生效`;})));
+    else this.text(this.node,info.complete?'下周可从历史最高层的一半重新挑战':'每进入新的五层区段，都需要再选择一项诅咒',0,5,375,65,16,C.ink);
+    this.button(`刷新候选 · 今日剩余 ${1-info.rerolls} 次`,0,-72,300,35,()=>this.action(()=>{rerollTowerCurses(this.game);this.status='候选已刷新，刷新页面不会改变本次候选';}));
+    this.text(this.node,`胜利奖励：${info.rewards.feathers} 羽片 · ${info.rewards.sigils} 塔印\n金币 ${info.rewards.gold} · 材料用于升级披风`,0,-120,390,44,14,C.gold);
+    this.button(info.unlocked?'挑战本层':'主线第 8 关后开放',0,-171,300,44,()=>this.action(()=>{startTower(this.game);this.towerOpen=false;this.combatClock=0;}),true);
+    this.button('返回主线',-98,-225,184,38,()=>{this.towerOpen=false;this.render();});
+    this.button('升级披风',98,-225,184,38,()=>{this.tab='camp';this.mantleOpen=true;this.status='';this.render();});
+    this.text(this.node,'每天 00:00 恢复次数；每周一 00:00 清空诅咒\n周进度回到历史最高层的一半（向下取整）',0,-269,390,44,12,C.muted);
+    this.text(this.node,this.status,0,-310,390,30,12,C.muted);
+  }
+
+  private renderMantle() {
+    const level=this.game.mantleLevel,cost=mantleQuote(this.game);
+    this.text(this.node,`羽织披风 · Lv.${level}/20`,0,294,390,40,22,C.gold);
+    this.text(this.node,`拥有 ${this.game.feathers} 羽片 · ${this.game.sigils} 塔印\n挑战试炼塔获得，主线第 8 关开放`,0,247,390,45,14,C.muted);
+    this.drawMantle(0,170,0.55);
+    this.text(this.node,`当前：攻击 +${level*2} · 生命 +${level*15} · 防御 +${Math.floor(level/2)}\n每级攻击 +2、生命 +15，每两级防御 +1`,0,104,390,46,14,C.cyan);
+    this.text(this.node,cost.max?'披风已满级':`升至 Lv.${cost.level}：${cost.feathers} 羽片 · ${cost.gold} 金币 · ${cost.sigils} 塔印`,0,48,390,43,14,C.ink);
+    this.button(cost.max?'已达最高等级':'升级披风',0,-12,290,42,()=>this.action(()=>{const lv=upgradeMantle(this.game);this.status=`披风升至 Lv.${lv}${lv%5===0?'，解锁新的被动效果':''}`;}),true);
+    this.text(this.node,this.status,0,-55,390,32,12,C.muted);
+    MANTLE_PASSIVES.forEach((p:any,i:number)=>this.text(this.node,`${level>=p.level?'已激活':'Lv.'+p.level+' 解锁'} · ${p.name}\n${p.description}`,0,-104-i*49,390,45,14,level>=p.level?C.gold:C.muted));
+    this.button('返回营地',0,-309,260,34,()=>{this.mantleOpen=false;this.render();});
   }
 
   private renderSkills() {

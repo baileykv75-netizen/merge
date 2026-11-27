@@ -3,10 +3,11 @@
 import {newGame,heroStats,itemStats,equip,synthesize,enhance,battle,SLOTS,RARITIES,MILESTONES,claimMilestone,
   learnSkill,assignSkill,stageInfo,syncTime,claimIdle,DAILY_TASKS,claimDaily,TALENTS,talentCost,upgradeTalent,
   dungeonInfo,startDungeon,advanceEncounter,closeEncounter,MAX_STAGE,restoreGame} from '../assets/scripts/core/game-core.ts';
+import {pathToFileURL} from 'node:url';
 const START=Date.UTC(2026,10,27,0);
 const score=item=>{const p=itemStats(item);return p.attack*4+p.health+p.defense*6+(item?.affix==='生命恢复'?30:0);};
 function outfit(s){for(const slot of SLOTS){const best=s.bag.filter(i=>i.slot===slot).sort((a,b)=>score(b)-score(a))[0];if(best&&score(best)>score(s.equipped[slot]))equip(s,best.id);}}
-function manage(s,now){
+export function manage(s,now){
   for(const m of MILESTONES)if(m.stage<=s.bestStage&&!s.milestoneClaims.includes(m.stage)&&s.bag.length<=95)claimMilestone(s,m.stage);
   outfit(s);
   for(let count=0;count<30;count++){
@@ -37,7 +38,7 @@ function manage(s,now){
   }
   for(const t of DAILY_TASKS)if(s.daily[t.id]>=t.target&&!s.daily.claimed.includes(t.id))claimDaily(s,t.id,now);
 }
-function simulate(seed,hours){
+export function simulate(seed,hours,includeState=false){
   let s=newGame(seed,START),now=START,farm=0,wins=0,losses=0,dungeons=0,actions=0;
   const checkpoints=[];
   while(now<START+hours*3600000&&actions++<10000&&s.bestStage<MAX_STAGE){
@@ -54,8 +55,10 @@ function simulate(seed,hours){
     if(result.won)wins++;else losses++;
     now+=Math.max(20000,result.events.length*450+15000);
   }
-  return {seed,hours,bestStage:s.bestStage,wins,losses,dungeons,merges:s.daily.merges,power:heroStats(s).power,gold:s.gold,ore:s.ore,bag:s.bag.length,checkpoints};
+  return {seed,hours,bestStage:s.bestStage,wins,losses,dungeons,merges:s.daily.merges,power:heroStats(s).power,gold:s.gold,ore:s.ore,bag:s.bag.length,checkpoints,...(includeState?{state:s,now}:{})};
 }
+if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
 const hours=Number(process.argv[2]||1),count=Number(process.argv[3]||10);
 if(!(hours>0&&hours<=72&&count>=1&&count<=100))throw Error('范围：小时 1–72，样本数 1–100');
 console.log(JSON.stringify({method:'自动管理装备、技能、有限资源副本与阶段宝箱；未使用广告、付费或资源注入',hours,runs:Array.from({length:count},(_,i)=>simulate(1201+i*97,hours))},null,2));
+}

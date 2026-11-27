@@ -1,7 +1,88 @@
 // @ts-nocheck
 /** 装备合成原型的跨平台规则。只使用标准 JavaScript，网页和 Cocos 共用。 */
 
-export const SAVE_VERSION = 7;
+export const SAVE_VERSION = 8;
+export const TOWER_CAP = 60;
+export const TOWER_CURSES = [
+  {id:'fury',name:'凶暴',description:'每层：敌人伤害 +8%'},
+  {id:'vigor',name:'坚韧',description:'每层：敌人生命 +12%'},
+  {id:'wither',name:'枯萎',description:'每层：我方治疗 -10%\n最低保留 20%'},
+  {id:'burden',name:'重压',description:'每层：我方攻击 -6%\n最低保留 25%'},
+  {id:'delay',name:'迟滞',description:'每层：技能冷却\n增加 1 次行动'},
+];
+export const MANTLE_PASSIVES = [
+  {level:5,name:'羽护',description:'每场战斗开始获得最大生命 10% 的护盾'},
+  {level:10,name:'锐羽',description:'强力突刺与破甲斩伤害 +10%'},
+  {level:15,name:'余韵',description:'击败每波敌人后恢复最大生命 5%'},
+  {level:20,name:'御灵',description:'元素抗性 +5%'},
+];
+function weekKey(now){return Math.floor((dayKey(now)+3)/7);}
+function initialTower(seed,now){return {seed:seed>>>0,week:weekKey(now),day:dayKey(now),cleared:0,best:0,attempts:0,rerolls:0,offerRoll:0,curses:[]};}
+function towerAt(state,now){
+  const current=Math.max(state.clock,now),t={...state.tower};
+  // 已结算战斗保留旧周期快照，关闭结果后再刷新，避免跨周续播混入新周期。
+  if(state.encounter?.result.kind==='tower')return t;
+  if(weekKey(current)>t.week){t.week=weekKey(current);t.cleared=Math.floor(t.best/2);t.curses=[];t.offerRoll=0;}
+  if(dayKey(current)>t.day){t.day=dayKey(current);t.attempts=0;t.rerolls=0;}
+  return t;
+}
+export function towerModifiers(curses){
+  const count=id=>curses.filter(c=>c.id===id).length;
+  return {enemyAttack:1+count('fury')*0.08,enemyHealth:1+count('vigor')*0.12,healing:Math.max(0.2,1-count('wither')*0.1),attack:Math.max(0.25,1-count('burden')*0.06),cooldown:count('delay')};
+}
+export function towerInfo(state,now=Date.now()){
+  const t=towerAt(state,now),floor=t.cleared+1,band=Math.floor(t.cleared/5),complete=t.cleared===TOWER_CAP;
+  let hash=(t.seed ^ Math.imul(t.week+1,2654435761) ^ Math.imul(band+1,1597334677))>>>0;
+  hash=(Math.imul(hash,1664525)+1013904223)>>>0;
+  const first=(hash+t.offerRoll)%TOWER_CURSES.length;
+  const choices=[TOWER_CURSES[first],TOWER_CURSES[(first+1+((hash>>>8)%3))%TOWER_CURSES.length]];
+  const stage=Math.min(MAX_STAGE,4+Math.floor((floor-1)*0.45));
+  const cycle=[['scout','raider'],['bulwark','scout'],['hexer','mender'],['berserker','bulwark'],['bulwark',['chief','rootlord','warden'][Math.floor((floor-1)/5)%3]]];
+  const ids=[...cycle[(floor-1)%5]];
+  if(floor>10)ids.unshift(['raider','hexer','bulwark'][Math.floor(floor/5)%3]);
+  if(floor>30)ids.unshift('berserker');
+  const modifiers=towerModifiers(t.curses);
+  const depth=floor-1;
+  const foes=ids.map((id,i)=>{const f=campaignEnemy(stage,id,i+1);return {...f,maxHp:Math.round(f.maxHp*(1+depth*depth/3000)*modifiers.enemyHealth),damage:f.damage*(1+depth*depth/4000)*modifiers.enemyAttack};});
+  return {...t,floor,band,stage,foes,modifiers,choices,complete,unlocked:state.bestStage>=8,remaining:Math.max(0,5-t.attempts),needsChoice:!complete&&!t.curses.some(c=>c.band===band),
+    rewards:{feathers:5+Math.floor(floor/5)*2,sigils:floor%5===0?1+Math.floor(floor/15):0,gold:40+floor*10}};
+}
+export function selectTowerCurse(state,id,now=Date.now()){
+  gemGuard(state);syncTime(state,now);const info=towerInfo(state,now);
+  if(!info.unlocked)throw new Error('通关主线第 8 关后开放试炼塔');
+  if(!info.needsChoice)throw new Error('当前区段已选择诅咒或本周已登顶');
+  if(!info.choices.some(c=>c.id===id))throw new Error('请选择当前提供的诅咒');
+  state.tower.curses.push({band:info.band,id});state.tower.offerRoll=0;
+}
+export function rerollTowerCurses(state,now=Date.now()){
+  gemGuard(state);syncTime(state,now);const info=towerInfo(state,now);
+  if(!info.unlocked||!info.needsChoice)throw new Error('当前不能刷新诅咒');
+  if(state.tower.rerolls>=1)throw new Error('今日免费刷新已用完');
+  state.tower.rerolls++;state.tower.offerRoll++;
+}
+export function startTower(state,now=Date.now()){
+  gemGuard(state);syncTime(state,now);const info=towerInfo(state,now);
+  if(!info.unlocked)throw new Error('通关主线第 8 关后开放试炼塔');
+  if(info.complete)throw new Error('本周已登顶，下周可再次挑战');
+  if(info.needsChoice)throw new Error('请先选择本区段的诅咒');
+  if(!info.remaining)throw new Error('今日挑战次数已用完，明日再来');
+  state.tower.attempts++;
+  const combat=simulateCombat(state,info.stage,'tower',{foes:info.foes,modifiers:info.modifiers});
+  const rewards={gold:0,ore:0,items:[],feathers:0,sigils:0};
+  if(combat.won){Object.assign(rewards,info.rewards);state.feathers+=rewards.feathers;state.sigils+=rewards.sigils;state.gold+=rewards.gold;
+    state.tower.cleared=info.floor;state.tower.best=Math.max(state.tower.best,info.floor);state.daily.wins++;}
+  state.encounter={result:{...combat,rewards,kind:'tower',floor:info.floor,week:info.week,curses:state.tower.curses.map(c=>({...c}))},cursor:0};
+  state.history.unshift(`试炼塔第 ${info.floor} 层${combat.won?'通关':'失败'}：羽片 +${rewards.feathers}，塔印 +${rewards.sigils}`);state.history=state.history.slice(0,20);
+  return state.encounter;
+}
+export function mantleQuote(state){const level=state.mantleLevel;return {max:level>=20,level:level+1,feathers:5+level*3,gold:80+level*40,sigils:(level+1)%5===0?(level+1)/5:0};}
+export function upgradeMantle(state){
+  gemGuard(state);if(state.bestStage<8)throw new Error('通关主线第 8 关后开放羽织披风');
+  const cost=mantleQuote(state);if(cost.max)throw new Error('披风已达最高等级');
+  if(state.feathers<cost.feathers||state.gold<cost.gold||state.sigils<cost.sigils)throw new Error(`需要 ${cost.feathers} 羽片、${cost.gold} 金币、${cost.sigils} 塔印`);
+  state.feathers-=cost.feathers;state.gold-=cost.gold;state.sigils-=cost.sigils;state.mantleLevel++;
+  return state.mantleLevel;
+}
 export const ENEMIES = {
   scout:{name:'荒原游兽',health:1,attack:1,mechanic:'普通攻击',tip:'穿戴完整装备，提高基础属性'},
   raider:{name:'掠夺者',health:0.95,attack:1,mechanic:'每三次攻击发动伏击',tip:'生命与坚守可承受伏击'},
@@ -24,13 +105,13 @@ export const CHAPTERS = [
 export const STAGES = CHAPTERS.flatMap((c,chapter)=>c.names.map((name,index)=>({id:chapter*10+index+1,name,chapter,waves:c.waves[index]})));
 export const MAX_STAGE = STAGES.length;
 export const MILESTONES = [5,10,15,20,25,30].map((stage,i)=>({stage,rarity:['common','fine','fine','rare','rare','epic'][i],slot:i%2?'armor':'weapon',gold:200+i*150,ore:25+i*15}));
+function campaignEnemy(stage,id,wave){const growth=Math.max(0,stage-8);return {...ENEMIES[id],id,maxHp:Math.round((33+stage*13+wave*10)*ENEMIES[id].health*(1+growth*0.12)),damage:(3+stage*2+wave)*ENEMIES[id].attack*(1+growth*0.08)};}
 export function stageInfo(stage) {
   const def=STAGES[stage-1];if(!Number.isInteger(stage)||!def)throw new Error('关卡不存在');
   const base=def.chapter===0?'common':def.chapter===1?'fine':'rare';
   const bonus=def.chapter===0?'fine':def.chapter===1?'rare':'epic';
   const chance=stage%10>=5||stage%10===0 ? (def.chapter===2?0.1:0.18):0;
-  const growth=Math.max(0,stage-8);
-  const foes=def.waves.map((id,i)=>({...ENEMIES[id],id,maxHp:Math.round((33+stage*13+(i+1)*10)*ENEMIES[id].health*(1+growth*0.12)),damage:(3+stage*2+i+1)*ENEMIES[id].attack*(1+growth*0.08)}));
+  const foes=def.waves.map((id,i)=>campaignEnemy(stage,id,i+1));
   return {...def,chapterName:CHAPTERS[def.chapter].name,foes,gold:35+stage*18,ore:3+stage,baseRarity:base,bonusRarity:bonus,bonusChance:chance};
 }
 export function claimMilestone(state,stage) {
@@ -148,6 +229,10 @@ export function newGame(seed = Date.now(), now = Date.now()) {
     bestStage: 0,
     stageProgress: {},
     milestoneClaims: [],
+    feathers: 0,
+    sigils: 0,
+    mantleLevel: 0,
+    tower: initialTower(seed,now),
     gold: 120,
     ore: 25,
     shards: 0,
@@ -203,10 +288,13 @@ export function heroStats(state) {
   stats.attack += (state.talents?.attack || 0) * 2;
   stats.health += (state.talents?.health || 0) * 15;
   stats.defense += state.talents?.defense || 0;
+  const mantle=state.mantleLevel||0;
+  stats.attack+=mantle*2;stats.health+=mantle*15;stats.defense+=Math.floor(mantle/2);
   const affixes = Object.values(state.equipped).filter(Boolean).map(item => item.affix);
   stats.crit = Math.min(0.5, 0.05 + affixes.filter(x => x === '暴击').length * 0.04);
   stats.regen = affixes.filter(x => x === '生命恢复').length * 2;
-  stats.resist = Math.min(0.4, affixes.filter(x => x === '元素抗性').length * 0.05);
+  stats.resist = Math.min(0.4, affixes.filter(x => x === '元素抗性').length * 0.05+(mantle>=20?0.05:0));
+  stats.barrier=mantle>=5?Math.floor(stats.health*0.1):0;stats.skillBoost=mantle>=10?0.1:0;stats.victoryRegen=mantle>=15?0.05:0;
   stats.power = stats.attack * 4 + stats.health + stats.defense * 6;
   return stats;
 }
@@ -326,24 +414,27 @@ export function battle(state, stage, now = Date.now()) {
   return { ...combat, rewards };
 }
 
-function simulateCombat(state, stage, profile = null) {
+function simulateCombat(state, stage, profile = null, options = {}) {
   const hero = heroStats(state);
+  const modifiers=options.modifiers||{attack:1,healing:1,cooldown:0};
+  hero.attack=Math.max(1,Math.round(hero.attack*modifiers.attack));
   let heroHp = hero.health;
+  let barrier=hero.barrier;
   const events = [];
-  const mainInfo=profile ? null : stageInfo(stage);
-  const waveCount = mainInfo ? mainInfo.waves.length : stage < 4 ? 2 : stage < 8 ? 3 : 4;
+  const foes=options.foes || (profile ? null : stageInfo(stage).foes);
+  const waveCount = foes ? foes.length : stage < 4 ? 2 : stage < 8 ? 3 : 4;
   const equippedSkills = state.skillLoadouts[state.activeLoadout].filter(Boolean);
-  const readyAt = Object.fromEntries(equippedSkills.map(id => [id, SKILLS.find(s=>s.id===id).cooldown]));
+  const readyAt = Object.fromEntries(equippedSkills.map(id => [id, SKILLS.find(s=>s.id===id).cooldown+modifiers.cooldown]));
   let tick = 0, shield = 0, shieldRate = 0, fury = 0, furyRate = 0;
   let won = true;
   let progress = 0;
   for (let wave = 1; wave <= waveCount; wave++) {
-    const enemyId=mainInfo?.waves[wave-1], foe=mainInfo?.foes[wave-1];
+    const foe=foes?.[wave-1],enemyId=foe?.id;
     const armor=foe?.armor || (profile==='ore'?0.18:0);
     let enemyHp = foe?.maxHp || Math.round((33 + stage * 13 + wave * 10) * (profile === 'ore' ? 1.15 : 1));
     const enemyMaxHp = enemyHp;
     const enemyDamage = foe?.damage || 3 + stage * 2 + wave;
-    events.push({ type: "wave", wave, maxHp: enemyHp, ...(foe?{enemyId,enemyName:foe.name,mechanic:foe.mechanic,boss:!!foe.boss}:{}) });
+    events.push({ type: "wave", wave, maxHp: enemyHp, heroShield:barrier, ...(foe?{enemyId,enemyName:foe.name,mechanic:foe.mechanic,boss:!!foe.boss}:{}) });
     let turn = 0;
     let poison = 0, poisonDamage = 0;
     let enraged = false;
@@ -359,7 +450,7 @@ function simulateCombat(state, stage, profile = null) {
           skill = id;
         } else if (id === 'mend') {
           if (heroHp === hero.health) continue;
-          const amount = Math.min(hero.health-heroHp,Math.round(hero.health*(0.08+level*0.04)));
+          const amount = Math.min(hero.health-heroHp,Math.round(hero.health*(0.08+level*0.04)*modifiers.healing));
           heroHp += amount; events.push({type:'heal',wave,heroHp,amount,skill:id});
         } else {
           if (id === 'guard') { shield=2;shieldRate=0.25+0.1*level; }
@@ -367,7 +458,7 @@ function simulateCombat(state, stage, profile = null) {
           if (id === 'venom') { poison=3;poisonDamage=Math.max(1,Math.round(hero.attack*(0.2+0.1*level))); }
           events.push({type:'buff',wave,skill:id});
         }
-        readyAt[id] = tick + definition.cooldown;
+        readyAt[id] = tick + definition.cooldown+modifiers.cooldown;
       }
       const poisoned = poison > 0;
       if (poisoned) {
@@ -377,7 +468,7 @@ function simulateCombat(state, stage, profile = null) {
       }
       const critical = random(state) < hero.crit;
       const skillPower = skill === 'slash' ? 1.45+0.25*state.skills.slash : skill === 'cleave' ? 1.8+0.35*state.skills.cleave : 1;
-      const damage = Math.max(1, Math.round(hero.attack * skillPower * (fury>0 ? 1+furyRate : 1) * (critical ? 1.5 : 1) * (skill !== 'cleave' ? 1-armor : 1) * (0.9 + random(state) * 0.2)));
+      const damage = Math.max(1, Math.round(hero.attack * skillPower * (skill?1+hero.skillBoost:1) * (fury>0 ? 1+furyRate : 1) * (critical ? 1.5 : 1) * (skill !== 'cleave' ? 1-armor : 1) * (0.9 + random(state) * 0.2)));
       if (fury>0) fury--;
       enemyHp = Math.max(0, enemyHp - damage);
       const cooldowns = equippedSkills.map(id=>({id,remaining:Math.max(0,readyAt[id]-tick)}));
@@ -388,8 +479,9 @@ function simulateCombat(state, stage, profile = null) {
       const multiplier = ability === '蓄力重击' ? 2.2 : ability === '伏击' ? 2 : ability ? 1.5 : 1;
       const taken = Math.max(1, Math.round((enemyDamage * multiplier * (enraged?foe.enrage:1) * (0.9 + random(state) * 0.2) - hero.defense * 0.22) * (profile === 'shards' || foe?.elemental ? 1 - hero.resist : 1) * (shield>0 ? 1-shieldRate : 1)));
       if (shield>0) shield--;
-      heroHp = Math.max(0, heroHp - taken);
-      events.push({ type: "enemy", wave, damage: taken, heroHp, ability });
+      const absorbed=Math.min(barrier,taken);barrier-=absorbed;
+      heroHp = Math.max(0, heroHp - (taken-absorbed));
+      events.push({ type: "enemy", wave, damage: taken-absorbed, heroHp, ability, absorbed, heroShield:barrier });
       if(heroHp>0 && foe?.charge && turn%foe.charge===foe.charge-1)events.push({type:'enemyStatus',wave,text:`${foe.name}正在蓄力，下次攻击发动重击`});
       if (heroHp > 0 && (profile === 'dust'||foe?.heal) && turn % 3 === 0) {
         const amount = Math.min(enemyMaxHp - enemyHp, Math.ceil(enemyMaxHp * (foe?.heal||0.1) * (poisoned?0.5:1)));
@@ -397,19 +489,20 @@ function simulateCombat(state, stage, profile = null) {
         events.push({type:'enemyHeal', wave, amount, enemyHp, suppressed:poisoned});
       }
       if (heroHp > 0 && hero.regen) {
-        heroHp = Math.min(hero.health, heroHp + hero.regen);
-        events.push({ type: 'heal', wave, heroHp, amount: hero.regen });
+        const amount=Math.min(hero.health-heroHp,Math.round(hero.regen*modifiers.healing));heroHp+=amount;
+        events.push({ type: 'heal', wave, heroHp, amount });
       }
     }
     progress=Math.round((wave-1+(1-enemyHp/enemyMaxHp))/waveCount*100);
     if (heroHp <= 0 || turn >= 100) { won = false; break; }
+    if(hero.victoryRegen&&heroHp<hero.health){const amount=Math.min(hero.health-heroHp,Math.round(hero.health*hero.victoryRegen*modifiers.healing));heroHp+=amount;events.push({type:'heal',wave,heroHp,amount,source:'披风余韵'});}
   }
   return { won, stage, waveCount, heroHp, maxHeroHp: hero.health, events, progress:won?100:Math.min(99,progress) };
 }
 
 /** @param {unknown} value */
 export function restoreGame(value, now = Date.now()) {
-  if (!value || typeof value !== "object" || ![1, 2, 3, 4, 5, 6, SAVE_VERSION].includes(value.version)) return null;
+  if (!value || typeof value !== "object" || ![1, 2, 3, 4, 5, 6, 7, SAVE_VERSION].includes(value.version)) return null;
   if (!Array.isArray(value.bag) || !value.equipped || !Number.isInteger(value.seed)) return null;
   if (!Number.isInteger(value.stageUnlocked) || value.stageUnlocked < 1 || value.stageUnlocked > MAX_STAGE) return null;
   const validNumber = n => Number.isSafeInteger(n) && n >= 0;
@@ -459,6 +552,11 @@ export function restoreGame(value, now = Date.now()) {
     state.stageProgress=Object.fromEntries(Array.from({length:state.bestStage},(_,i)=>[i+1,100]));
     state.stageUnlocked=Math.max(state.stageUnlocked,Math.min(MAX_STAGE,state.bestStage+1));
   }
+  if(oldVersion<8){state.version=SAVE_VERSION;state.feathers=0;state.sigils=0;state.mantleLevel=0;state.tower=initialTower(state.seed,Math.max(state.clock,now));}
+  if(!['feathers','sigils','mantleLevel'].every(k=>validNumber(state[k]))||state.mantleLevel>20)return null;
+  const tower=state.tower;
+  if(!tower||!['seed','week','day','cleared','best','attempts','rerolls','offerRoll'].every(k=>validNumber(tower[k]))||tower.seed>4294967295||tower.best>TOWER_CAP||tower.cleared>tower.best||tower.attempts>5||tower.rerolls>1||tower.offerRoll>7)return null;
+  if(!Array.isArray(tower.curses)||tower.curses.length>12||new Set(tower.curses.map(c=>c?.band)).size!==tower.curses.length||tower.curses.some(c=>!c||!validNumber(c.band)||c.band>11||c.band>Math.floor(tower.cleared/5)||!TOWER_CURSES.some(d=>d.id===c.id)))return null;
   if(!Array.isArray(state.milestoneClaims)||new Set(state.milestoneClaims).size!==state.milestoneClaims.length||state.milestoneClaims.some(s=>s>state.bestStage||!MILESTONES.some(m=>m.stage===s)))return null;
   if(!state.stageProgress||typeof state.stageProgress!=='object'||Array.isArray(state.stageProgress)||Object.entries(state.stageProgress).some(([s,p])=>!STAGES.some(d=>String(d.id)===s)||!validNumber(p)||p>100))return null;
   if (!state.skills || SKILLS.some(s => !validNumber(state.skills[s.id]) || state.skills[s.id]>3 ||
@@ -499,14 +597,18 @@ export function restoreGame(value, now = Date.now()) {
 function validEncounter(encounter) {
   const r = encounter?.result;
   const nonnegative = x => Number.isSafeInteger(x) && x >= 0;
-  if (r?.kind != null && (r.kind !== 'dungeon' || !DUNGEONS.some(d => d.id === r.dungeonId) || !Number.isInteger(r.difficulty) || r.difficulty < 0 || r.difficulty > 2)) return false;
+  if(r?.kind!=null){
+    if(r.kind==='dungeon'){if(!DUNGEONS.some(d=>d.id===r.dungeonId)||!Number.isInteger(r.difficulty)||r.difficulty<0||r.difficulty>2)return false;}
+    else if(r.kind==='tower'){if(!Number.isInteger(r.floor)||r.floor<1||r.floor>TOWER_CAP||!nonnegative(r.week)||!Array.isArray(r.curses)||r.curses.some(c=>!c||!TOWER_CURSES.some(d=>d.id===c.id))||!nonnegative(r.rewards?.feathers)||!nonnegative(r.rewards?.sigils))return false;}
+    else return false;
+  }
   if (!r || typeof r.won !== 'boolean' || !Number.isInteger(r.stage) || r.stage < 1 || r.stage > MAX_STAGE
     || !Number.isInteger(r.waveCount) || r.waveCount < 2 || r.waveCount > 4
     || !nonnegative(r.heroHp) || !nonnegative(r.maxHeroHp) || r.maxHeroHp < 1 || r.heroHp > r.maxHeroHp
     || !Array.isArray(r.events) || r.events.length > 1500 || !nonnegative(encounter.cursor)
     || encounter.cursor > r.events.length || !r.rewards || !nonnegative(r.rewards.gold)
     || !nonnegative(r.rewards.ore) || !Array.isArray(r.rewards.items)) return false;
-  return r.events.every(e => e && Number.isInteger(e.wave) && e.wave >= 1 && e.wave <= r.waveCount && (
+  return r.events.every(e => e && Number.isInteger(e.wave) && e.wave >= 1 && e.wave <= r.waveCount && (e.heroShield==null||nonnegative(e.heroShield)) && (e.absorbed==null||nonnegative(e.absorbed)) && (
     e.type === 'wave' ? nonnegative(e.maxHp) && e.maxHp > 0 :
     e.type === 'hero' ? nonnegative(e.damage) && nonnegative(e.enemyHp) :
     e.type === 'enemy' ? nonnegative(e.damage) && nonnegative(e.heroHp) && e.heroHp <= r.maxHeroHp :
@@ -532,17 +634,19 @@ export function closeEncounter(state) {
   if (!state.encounter) return;
   if (state.encounter.cursor < state.encounter.result.events.length) throw new Error('战斗尚未结束');
   state.encounter = null;
+  state.tower=towerAt(state,state.clock);
 }
 export function encounterView(state) {
   const c = state.encounter;
   if (!c) return null;
   const view = { heroHp: c.result.maxHeroHp, enemyHp: 0, enemyMaxHp: 1, wave: 1,
-    attacks: 0, last: null, cooldowns: [], enemyName:'敌人',mechanic:'',boss:false, done: c.cursor === c.result.events.length, result: c.result };
+    attacks: 0, last: null, cooldowns: [], heroShield:0, enemyName:'敌人',mechanic:'',boss:false, done: c.cursor === c.result.events.length, result: c.result };
   for (const e of c.result.events.slice(0, c.cursor)) {
     view.last = e; view.wave = e.wave;
     if (e.type === 'wave') { view.enemyHp = e.maxHp; view.enemyMaxHp = e.maxHp; view.attacks = 0;view.enemyName=e.enemyName||'敌人';view.mechanic=e.mechanic||'';view.boss=!!e.boss; }
     if (e.type === 'hero') { view.enemyHp = e.enemyHp; view.attacks++; }
     if (e.cooldowns) view.cooldowns = e.cooldowns;
+    if(e.heroShield!=null)view.heroShield=e.heroShield;
     if (e.type === 'enemyHeal') view.enemyHp = e.enemyHp;
     if (e.type === 'enemy' || e.type === 'heal') view.heroHp = e.heroHp;
   }
@@ -555,6 +659,7 @@ export function syncTime(state, now = Date.now()) {
   if (!Number.isSafeInteger(now) || now < 0) throw new Error('时间无效');
   const current = Math.max(state.clock, now);
   state.clock = current;
+  state.tower=towerAt(state,current);
   if (dayKey(current) > state.dungeonDay) {
     state.dungeonDay = dayKey(current);
     state.dungeonAttempts = Object.fromEntries(DUNGEONS.map(d => [d.id,0]));
