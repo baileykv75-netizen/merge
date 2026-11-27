@@ -198,6 +198,7 @@ export function enhance(state, slot, now = Date.now()) {
 
 /** @param {any} state @param {number} stage */
 export function battle(state, stage, now = Date.now()) {
+  if (state.encounter) throw new Error('请先完成当前战斗');
   if (!Number.isInteger(stage) || stage < 1 || stage > 10 || stage > state.stageUnlocked) {
     throw new Error("关卡尚未开放");
   }
@@ -293,7 +294,55 @@ export function restoreGame(value, now = Date.now()) {
   if (!d || !validNumber(d.day) || !['wins', 'merges', 'upgrades'].every(k => validNumber(d[k]))
     || !Array.isArray(d.claimed) || new Set(d.claimed).size !== d.claimed.length
     || d.claimed.some(id => !DAILY_TASKS.some(t => t.id === id))) return null;
+  if (state.encounter != null && !validEncounter(state.encounter)) return null;
   return state;
+}
+
+function validEncounter(encounter) {
+  const r = encounter?.result;
+  const nonnegative = x => Number.isSafeInteger(x) && x >= 0;
+  if (!r || typeof r.won !== 'boolean' || !Number.isInteger(r.stage) || r.stage < 1 || r.stage > 10
+    || !Number.isInteger(r.waveCount) || r.waveCount < 2 || r.waveCount > 4
+    || !nonnegative(r.heroHp) || !nonnegative(r.maxHeroHp) || r.maxHeroHp < 1 || r.heroHp > r.maxHeroHp
+    || !Array.isArray(r.events) || r.events.length > 1500 || !nonnegative(encounter.cursor)
+    || encounter.cursor > r.events.length || !r.rewards || !nonnegative(r.rewards.gold)
+    || !nonnegative(r.rewards.ore) || !Array.isArray(r.rewards.items)) return false;
+  return r.events.every(e => e && Number.isInteger(e.wave) && e.wave >= 1 && e.wave <= r.waveCount && (
+    e.type === 'wave' ? nonnegative(e.maxHp) && e.maxHp > 0 :
+    e.type === 'hero' ? nonnegative(e.damage) && nonnegative(e.enemyHp) :
+    e.type === 'enemy' ? nonnegative(e.damage) && nonnegative(e.heroHp) && e.heroHp <= r.maxHeroHp :
+    e.type === 'heal' ? nonnegative(e.amount) && nonnegative(e.heroHp) && e.heroHp <= r.maxHeroHp : false));
+}
+
+// 开始时仅结算一次；后续播放、加速、恢复和确认结果均不再发奖。
+export function startEncounter(state, stage, now = Date.now()) {
+  if (state.encounter) throw new Error('请先完成当前战斗');
+  const result = battle(state, stage, now);
+  state.encounter = { result, cursor: 0 };
+  return state.encounter;
+}
+export function advanceEncounter(state) {
+  const current = state.encounter;
+  if (!current || current.cursor >= current.result.events.length) return null;
+  return current.result.events[current.cursor++];
+}
+export function closeEncounter(state) {
+  if (!state.encounter) return;
+  if (state.encounter.cursor < state.encounter.result.events.length) throw new Error('战斗尚未结束');
+  state.encounter = null;
+}
+export function encounterView(state) {
+  const c = state.encounter;
+  if (!c) return null;
+  const view = { heroHp: c.result.maxHeroHp, enemyHp: 0, enemyMaxHp: 1, wave: 1,
+    attacks: 0, last: null, done: c.cursor === c.result.events.length, result: c.result };
+  for (const e of c.result.events.slice(0, c.cursor)) {
+    view.last = e; view.wave = e.wave;
+    if (e.type === 'wave') { view.enemyHp = e.maxHp; view.enemyMaxHp = e.maxHp; view.attacks = 0; }
+    if (e.type === 'hero') { view.enemyHp = e.enemyHp; view.attacks++; }
+    if (e.type === 'enemy' || e.type === 'heal') view.heroHp = e.heroHp;
+  }
+  return view;
 }
 
 // 以 UTC+8 自然日刷新，时间回拨不会重新发奖励。

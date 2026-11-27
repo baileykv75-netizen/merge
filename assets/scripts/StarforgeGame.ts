@@ -1,10 +1,10 @@
 import {
   _decorator, Component, Node, UITransform, Graphics, Label, Color,
-  Sprite, SpriteFrame, resources, Layers, Vec3, sys, isValid, Camera,
+  Sprite, SpriteFrame, resources, Layers, Vec3, sys, isValid, Camera, tween,
 } from 'cc';
 import {
   SLOTS, SLOT_NAMES, RARITIES, newGame, restoreGame, heroStats,
-  itemStats, equip, toggleLock, synthesize, enhance, battle,
+  itemStats, equip, toggleLock, synthesize, enhance, startEncounter, advanceEncounter, closeEncounter, encounterView,
   syncTime, idleReward, claimIdle, TALENTS, talentCost, upgradeTalent, DAILY_TASKS, claimDaily, salvage,
 } from './core/game-core';
 
@@ -30,12 +30,35 @@ export class StarforgeGame extends Component {
   private bagPage = 0;
   private status = '点击挑战，获得装备并开始合成。';
   private frames: Record<string, SpriteFrame> = {};
+  private combatClock = 0;
+  private combatSpeed = 1;
+
+  update(dt: number) {
+    const fight = this.game?.encounter;
+    if (!fight || fight.cursor >= fight.result.events.length) return;
+    this.combatClock += dt * this.combatSpeed;
+    if (this.combatClock < 0.45) return;
+    this.combatClock = 0;
+    advanceEncounter(this.game);
+    this.save();
+    if (this.tab === 'adventure') this.render();
+  }
+
+  private switchTab(tab: 'adventure' | 'equipment' | 'synthesis' | 'camp') {
+    if (this.game.encounter) {
+      const view = encounterView(this.game);
+      if (!view.done) return;
+      closeEncounter(this.game); this.save();
+    }
+    this.tab = tab; this.bagPage = 0;
+    syncTime(this.game); this.render();
+  }
 
   onLoad() {
     try {
       this.game = restoreGame(JSON.parse(sys.localStorage.getItem(SAVE_KEY) || 'null')) || newGame();
     } catch { this.game = newGame(); }
-    this.stage = this.game.stageUnlocked;
+    this.stage = this.game.encounter?.result.stage || this.game.stageUnlocked;
     syncTime(this.game);
     this.save();
     this.schedule(() => { syncTime(this.game); this.save(); this.render(); }, 30);
@@ -113,6 +136,7 @@ export class StarforgeGame extends Component {
     sprite.sizeMode = Sprite.SizeMode.CUSTOM;
     sprite.spriteFrame = frame;
     node.getComponent(UITransform)!.setContentSize(w, h);
+    return node;
   }
 
   private action(operation: () => void) {
@@ -135,21 +159,58 @@ export class StarforgeGame extends Component {
     if (this.tab === 'synthesis') this.renderSynthesis();
     if (this.tab === 'camp') this.renderCamp();
     this.box(this.node, 'Nav', 0, -365, 420, 72, C.panel, C.line);
-    this.button('冒险', -153, -365, 94, 46, () => { this.tab = 'adventure'; this.render(); }, this.tab === 'adventure');
-    this.button('装备', -51, -365, 94, 46, () => { this.tab = 'equipment'; this.bagPage = 0; this.render(); }, this.tab === 'equipment');
-    this.button('合成', 51, -365, 94, 46, () => { this.tab = 'synthesis'; this.bagPage = 0; this.render(); }, this.tab === 'synthesis');
-    this.button('营地', 153, -365, 94, 46, () => { this.tab = 'camp'; syncTime(this.game); this.render(); }, this.tab === 'camp');
+    this.button('冒险', -153, -365, 94, 46, () => this.switchTab('adventure'), this.tab === 'adventure');
+    this.button('装备', -51, -365, 94, 46, () => this.switchTab('equipment'), this.tab === 'equipment');
+    this.button('合成', 51, -365, 94, 46, () => this.switchTab('synthesis'), this.tab === 'synthesis');
+    this.button('营地', 153, -365, 94, 46, () => this.switchTab('camp'), this.tab === 'camp');
   }
 
   private renderAdventure() {
     const h = heroStats(this.game);
+    const fight = encounterView(this.game);
+    const running = fight && !fight.done;
     this.box(this.node, 'Battle', 0, 95, 396, 378, C.panel, C.line);
     this.picture('battle-observatory', 0, 95, 394, 375);
-    this.picture('hero-sky-knight', -92, 52, 178, 250);
-    this.picture('void-beast', 100, 80, 164, 174);
-    this.text(this.node, `第 ${this.stage} 关  ·  试炼场`, 0, 249, 360, 35, 21, C.gold);
-    this.text(this.node, `战力 ${h.power}     攻击 ${h.attack}     生命 ${h.health}`,
-      0, -72, 360, 34, 14, C.ink);
+    const hero = this.picture('hero-sky-knight', -92, 52, 178, 250);
+    const enemy = this.picture('void-beast', 100, 80, 164, 174);
+    this.text(this.node, `第 ${this.stage} 关 · ${fight ? `第 ${fight.wave}/${fight.result.waveCount} 波` : '试炼场'}`, 0, 249, 360, 35, 21, C.gold);
+    const event = fight?.last;
+    if (running && event && ['hero', 'enemy'].includes(event.type)) {
+      const actor = event.type === 'hero' ? hero : enemy;
+      if (actor) {
+        const origin = actor.position.clone();
+        tween(actor).to(0.09, {position: new Vec3(origin.x + (event.type === 'hero' ? 24 : -24), origin.y)})
+          .to(0.12, {position: origin}).start();
+      }
+      this.text(this.node, `${event.critical ? '暴击 ' : ''}-${event.damage}`, event.type === 'hero' ? 100 : -92, 178, 180, 44, 26, event.critical ? C.gold : C.red);
+    }
+    if (running && event?.type === 'heal') this.text(this.node, `+${event.amount}`, -92, 178, 150, 40, 24, C.green);
+    this.healthBar(-100, -48, fight?.heroHp ?? h.health, fight?.result.maxHeroHp ?? h.health, C.green);
+    this.healthBar(100, -48, fight?.enemyHp ?? 1, fight?.enemyMaxHp ?? 1, C.red);
+    const notice = !fight ? `战力 ${h.power} · 攻击 ${h.attack} · 生命 ${h.health}` : fight.done ?
+      (fight.result.won ? '挑战成功！战利品已放入背包' : '挑战失败 · 强化装备后再来') :
+      event?.type === 'hero' ? `${event.skill ? '强力突刺' : '普通攻击'}：${event.damage} 伤害` :
+      event?.type === 'enemy' ? `敌人反击：${event.damage} 伤害` : event?.type === 'heal' ? `装备恢复 ${event.amount} 生命` : '敌人出现，准备战斗';
+    this.text(this.node, notice, 0, -83, 380, 30, 14, fight?.done ? C.gold : C.ink);
+    if (fight) {
+      this.text(this.node, running ? `强力突刺：${3 - fight.attacks % 3} 次攻击后释放 · 自动战斗中` :
+        `金币 +${fight.result.rewards.gold} · 铁矿 +${fight.result.rewards.ore} · 装备 +${fight.result.rewards.items.length}`,
+        0, -135, 390, 42, 14, C.muted);
+      if (running) {
+        this.button(`战斗速度 ×${this.combatSpeed}`, 0, -198, 250, 50, () => { this.combatSpeed = this.combatSpeed === 1 ? 2 : 1; this.render(); });
+      } else {
+        this.button(fight.result.won ? '继续冒险' : '再次挑战', -93, -198, 175, 50, () => this.action(() => {
+          const won = fight.result.won; closeEncounter(this.game);
+          if (won) this.stage = Math.min(10, this.stage + 1);
+          else { startEncounter(this.game, this.stage); this.combatClock = 0; }
+        }), true);
+        this.button('查看装备', 102, -198, 175, 50, () => this.switchTab('equipment'));
+      }
+      this.text(this.node, running ? '战斗中断后会保留进度，重新进入即可继续。' :
+        fight.result.rewards.items.map((item: any) => item.name).join('、') || '背包已满时，多余战利品自动转为铁矿。',
+        0, -269, 380, 60, 14, C.muted);
+      return;
+    }
     this.button('‹', -115, -125, 50, 42, () => {
       this.stage = Math.max(1, this.stage - 1); this.render();
     });
@@ -158,13 +219,16 @@ export class StarforgeGame extends Component {
       this.stage = Math.min(this.game.stageUnlocked, this.stage + 1); this.render();
     });
     this.button('开始挑战', 0, -194, 250, 55, () => this.action(() => {
-      const result = battle(this.game, this.stage);
-      this.status = result.won
-        ? `通关！金币 +${result.rewards.gold}，铁矿 +${result.rewards.ore}，装备 +${result.rewards.items.length}${result.rewards.recycled ? '（背包已满，多余装备自动分解）' : ''}`
-        : `挑战失败，获得 ${result.rewards.gold} 金币；强化后再试。`;
-      if (result.won) this.stage = Math.min(10, this.stage + 1);
+      startEncounter(this.game, this.stage); this.combatClock = 0;
     }), true);
     this.text(this.node, this.status, 0, -259, 380, 65, 15, C.muted);
+  }
+
+  private healthBar(x: number, y: number, hp: number, max: number, color: Color) {
+    this.box(this.node, 'HealthTrack', x, y, 172, 13, C.bg, C.line);
+    const width = 168 * Math.max(0, Math.min(1, hp / Math.max(1, max)));
+    if (width > 1) this.box(this.node, 'HealthFill', x - 84 + width / 2, y, width, 9, color);
+    this.text(this.node, `${hp} / ${max}`, x, y + 20, 172, 24, 12);
   }
 
   private renderEquipment() {
