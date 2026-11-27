@@ -1,6 +1,8 @@
 import {
   SLOTS, SLOT_NAMES, RARITIES, newGame, restoreGame, heroStats,
   itemStats, equip, toggleLock, synthesize, enhance, battle,
+  SKILLS,
+  syncTime, idleReward, claimIdle, TALENTS, talentCost, upgradeTalent, DAILY_TASKS, claimDaily, salvage,
 } from './game-core.js';
 
 const SAVE_KEY = 'starforge-prototype-v1';
@@ -112,10 +114,24 @@ function renderSynthesis() {
     <p class="hint">点击装备选择或取消材料。首轮合成通常在通关约 3 关后可以尝试。</p>`;
 }
 
+function renderCamp() {
+  syncTime(state);
+  const reward = idleReward(state);
+  screen.innerHTML = `<h2 class="section-title">营地 · 补给与训练</h2>
+    <section class="panel item-detail">体力每 5 分钟恢复 1 点，上限 30。离线收益最多积累 8 小时。
+    <div class="detail-actions"><button class="primary-button" data-action="idle">领取 ${reward.gold} 金币 / ${reward.ore} 铁矿</button></div></section>
+    ${TALENTS.map(t=>`<section class="panel item-detail"><b>${t.name} ${state.talents[t.id]}/${t.max}</b><br>${t.description}
+    <div class="detail-actions"><button class="secondary-button" data-talent="${t.id}" ${state.talents[t.id]>=t.max?'disabled':''}>训练 · ${talentCost(state,t.id)} 金币</button></div></section>`).join('')}
+    <h2 class="section-title" style="margin-top:16px">每日委托 <small>每天 00:00 刷新</small></h2>
+    ${DAILY_TASKS.map(t=>`<section class="panel item-detail"><b>${t.name} ${Math.min(t.target,state.daily[t.id])}/${t.target}</b><br>${t.gold} 金币 / ${t.ore} 铁矿
+    <div class="detail-actions"><button class="minor-button" data-task="${t.id}" ${state.daily.claimed.includes(t.id)||state.daily[t.id]<t.target?'disabled':''}>${state.daily.claimed.includes(t.id)?'已领取':'领取奖励'}</button></div></section>`).join('')}`;
+}
+
 function render() {
   renderResources();
   if (tab === 'adventure') renderAdventure();
   else if (tab === 'equipment') renderEquipment();
+  else if (tab === 'camp') renderCamp();
   else renderSynthesis();
   document.querySelectorAll('.bottom-nav button').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
 }
@@ -140,7 +156,15 @@ function runCombat() {
       combat.lines.push(`第 ${event.wave} 波敌人出现`);
     } else if (event.type === 'hero') {
       combat.enemyHp = event.enemyHp;
-      combat.lines.push(`${event.skill ? '✦ 强力突刺' : '普通攻击'}，造成 ${event.damage} 伤害`);
+      combat.lines.push(`${SKILLS.find(s=>s.id===event.skill)?.name || '普通攻击'}，造成 ${event.damage} 伤害`);
+    } else if (event.type === 'buff') {
+      combat.lines.push(`${SKILLS.find(s=>s.id===event.skill)?.name}发动`);
+    } else if (event.type === 'enemyHeal') {
+      combat.enemyHp = event.enemyHp;
+      combat.lines.push(`敌人恢复 ${event.amount} 生命`);
+    } else if (event.type === 'heal') {
+      combat.displayHp = event.heroHp;
+      combat.lines.push(`装备恢复 ${event.amount} 生命`);
     } else {
       combat.displayHp = event.heroHp;
       combat.lines.push(`虚空兽反击，受到 ${event.damage} 伤害`);
@@ -153,6 +177,8 @@ screen.addEventListener('click', (event) => {
   const target = event.target.closest('button');
   if (!target || target.disabled) return;
   try {
+    if (target.dataset.talent) { upgradeTalent(state,target.dataset.talent); save(); render(); return; }
+    if (target.dataset.task) { claimDaily(state,target.dataset.task); save(); render(); toast('委托奖励已领取'); return; }
     if (target.dataset.rarity) {
       selectedRarity = target.dataset.rarity; selectedMaterials = []; render(); return;
     }
@@ -169,6 +195,7 @@ screen.addEventListener('click', (event) => {
     }
     if (target.dataset.equipped) { selectedItem = state.equipped[target.dataset.equipped]?.id || null; render(); return; }
     switch (target.dataset.action) {
+      case 'idle': { const r=claimIdle(state); save(); toast(`领取 ${r.gold} 金币、${r.ore} 铁矿`); break; }
       case 'stage-prev': selectedStage = Math.max(1, selectedStage - 1); combat = null; break;
       case 'stage-next': selectedStage = Math.min(state.stageUnlocked, selectedStage + 1); combat = null; break;
       case 'battle': runCombat(); return;
@@ -200,4 +227,7 @@ document.querySelector('#reset-button').addEventListener('click', () => {
   selectedStage = 1; selectedItem = null; selectedMaterials = []; combat = null; render();
 });
 
+syncTime(state);
+save();
+setInterval(() => { syncTime(state); save(); if (!combatTimer) render(); }, 30000);
 render();
