@@ -320,6 +320,67 @@ export function toggleLock(state, id) {
   return item.locked;
 }
 
+export function itemPower(item){const s=itemStats(item);return s.attack*4+s.health+s.defense*6;}
+function inventoryFilters(options={}){
+  const slot=options.slot||'all',rarity=options.rarity||'all',sort=options.sort||'power';
+  if(slot!=='all'&&!SLOTS.includes(slot)||rarity!=='all'&&!RARITIES.some(r=>r.id===rarity)||!['power','rarity','newest'].includes(sort))throw new Error('背包筛选条件无效');
+  return {slot,rarity,sort};
+}
+export function inventoryList(state,options={}){
+  const {slot,rarity,sort}=inventoryFilters(options);
+  const list=state.bag.filter(i=>(slot==='all'||i.slot===slot)&&(rarity==='all'||i.rarity===rarity));
+  if(sort==='newest')return list.reverse();
+  const rank=i=>RARITIES.findIndex(r=>r.id===i.rarity);
+  return list.sort((a,b)=>sort==='rarity'?(rank(b)-rank(a)||itemPower(b)-itemPower(a)):(itemPower(b)-itemPower(a)||rank(b)-rank(a)));
+}
+function inventoryToken(state){return JSON.stringify([state.equipped,state.bag]);}
+function verifyInventoryToken(state,token){if(token!==inventoryToken(state))throw new Error('装备已发生变化，请重新预览');}
+function batchSafe(item){return !item.locked&&!item.level&&!item.sockets?.some(Boolean);}
+export function autoEquipPlan(state){
+  const equipped={...state.equipped},changes=[];
+  for(const slot of SLOTS){
+    const old=equipped[slot];if(old?.locked)continue;
+    const next=inventoryList(state,{slot}).find(i=>!i.locked&&itemPower(i)>itemPower(old));
+    if(next){changes.push({slot,from:old,to:next});equipped[slot]=next;}
+  }
+  return {token:inventoryToken(state),changes,before:heroStats(state),after:heroStats({...state,equipped})};
+}
+export function autoEquip(state,token){
+  gemGuard(state);verifyInventoryToken(state,token);const plan=autoEquipPlan(state);
+  if(!plan.changes.length)throw new Error('没有基础战力更高的可换装备');
+  for(const change of plan.changes)equip(state,change.to.id);
+  return plan;
+}
+export function batchMergePlan(state,options={}){
+  const filters=inventoryFilters(options),candidates=inventoryList(state,filters).filter(batchSafe),groups=[];
+  for(const rarity of RARITIES.slice(0,-1))for(const slot of SLOTS){
+    const materials=candidates.filter(i=>i.rarity===rarity.id&&i.slot===slot).sort((a,b)=>itemPower(a)-itemPower(b));
+    for(let i=0;i+5<=materials.length;i+=5){const rank=RARITIES.indexOf(rarity);groups.push({items:materials.slice(i,i+5),slot,rarity:RARITIES[rank+1].id,cost:40*(rank+1)});}
+  }
+  return {token:inventoryToken(state),filters,groups,cost:groups.reduce((n,g)=>n+g.cost,0),items:groups.flatMap(g=>g.items)};
+}
+export function batchMerge(state,options,token,now=Date.now()){
+  gemGuard(state);verifyInventoryToken(state,token);const plan=batchMergePlan(state,options);
+  if(!plan.groups.length)throw new Error('没有五件同部位、同品质的安全材料');
+  if(state.gold<plan.cost)throw new Error(`金币不足，整批需要 ${plan.cost}`);
+  // 在副本上完整执行，全部成功后提交；新产物不会继续参与本次合成。
+  const draft=JSON.parse(JSON.stringify(state)),results=[];
+  for(const group of plan.groups)results.push(synthesize(draft,group.items.map(i=>i.id),now));
+  Object.assign(state,draft);return results;
+}
+export function batchSalvagePlan(state,options={}){
+  const filters=inventoryFilters(options);
+  const allowed=['common','fine','rare'].includes(filters.rarity);
+  const items=allowed?inventoryList(state,filters).filter(batchSafe):[];
+  return {token:inventoryToken(state),filters,items,ore:items.reduce((sum,i)=>sum+5*(RARITIES.findIndex(r=>r.id===i.rarity)+1),0),allowed};
+}
+export function batchSalvage(state,options,token){
+  gemGuard(state);verifyInventoryToken(state,token);const plan=batchSalvagePlan(state,options);
+  if(!plan.allowed)throw new Error('批量分解请指定普通、精良或稀有品质');
+  if(!plan.items.length)throw new Error('当前筛选下没有可批量分解的装备');
+  return salvage(state,plan.items.map(i=>i.id));
+}
+
 /** @param {any} state @param {string[]} ids */
 export function synthesize(state, ids, now = Date.now()) {
   guardForge(state);
@@ -728,6 +789,7 @@ export function salvage(state, ids) {
 
 function guardForge(state) {
   if (state.pendingForge) throw new Error('请先在锻造台决定保留旧属性或采用新属性');
+  if (state.encounter) throw new Error('请先完成当前战斗');
 }
 export function findItem(state, id) {
   return [...state.bag, ...Object.values(state.equipped)].find(item => item?.id === id) || null;

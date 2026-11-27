@@ -12,6 +12,7 @@ import {
   SKILLS, skillPoints, learnSkill, assignSkill, activateLoadout, resetSkills,
   CHAPTERS, STAGES, MAX_STAGE, MILESTONES, stageInfo, claimMilestone,
   TOWER_CAP, TOWER_CURSES, MANTLE_PASSIVES, towerInfo, selectTowerCurse, rerollTowerCurses, startTower, mantleQuote, upgradeMantle,
+  inventoryList, itemPower, autoEquipPlan, autoEquip, batchMergePlan, batchMerge, batchSalvagePlan, batchSalvage,
 } from './core/game-core';
 
 const { ccclass } = _decorator;
@@ -54,6 +55,13 @@ export class StarforgeGame extends Component {
   private chapterIndex = 0;
   private towerOpen = false;
   private mantleOpen = false;
+  private inventoryOpen = false;
+  private inventorySlot = 'all';
+  private inventoryRarity = 'all';
+  private inventorySort = 'power';
+  private inventoryPage = 0;
+  private inventoryReview: any = null;
+  private synthesisConfirmation = '';
 
   update(dt: number) {
     const fight = this.game?.encounter;
@@ -76,6 +84,8 @@ export class StarforgeGame extends Component {
     this.tab = tab; this.bagPage = 0; this.forgeOpen = false; this.dungeonOpen = false; this.gemsOpen = false; this.skillsOpen = false;
     this.chapterOpen = false;
     this.towerOpen = false; this.mantleOpen = false;
+    this.inventoryOpen = false; this.inventoryReview = null;
+    this.synthesisConfirmation = '';
     syncTime(this.game); this.render();
   }
 
@@ -342,6 +352,7 @@ export class StarforgeGame extends Component {
   }
 
   private renderEquipment() {
+    if(this.inventoryOpen){this.renderInventory();return;}
     if (this.gemsOpen) { this.renderGems(); return; }
     if (this.forgeOpen && findItem(this.game, this.selectedItem)) { this.renderForge(); return; }
     this.text(this.node, `装备栏 · 战力 ${heroStats(this.game).power}`, -60, 293, 260, 30, 19, C.gold);
@@ -356,7 +367,9 @@ export class StarforgeGame extends Component {
       this.button(`${SLOT_NAMES[slot]}\n${item ? `${item.name} +${item.level}` : '空位'}`,
         x, y, 120, 62, () => { this.selectedItem = item?.id || null; this.render(); });
     });
-    this.text(this.node, `背包 ${this.game.bag.length}/100`, 0, 91, 340, 29, 18, C.gold);
+    this.text(this.node, `背包 ${this.game.bag.length}/100`, -60, 91, 250, 29, 18, C.gold);
+    this.button('整理',145,91,100,34,()=>{this.inventoryOpen=true;this.inventoryReview=null;this.inventoryPage=0;this.status='';this.render();});
+    this.bagPage=Math.min(this.bagPage,Math.max(0,Math.ceil(this.game.bag.length/9)-1));
     const page = this.game.bag.slice(this.bagPage * 9, this.bagPage * 9 + 9);
     page.forEach((item: any, index: number) => {
       const x = -130 + (index % 3) * 130;
@@ -400,6 +413,63 @@ export class StarforgeGame extends Component {
       }
     }
     this.text(this.node, this.status, 0, -303, 385, 40, 13, C.muted);
+  }
+
+  private inventoryOptions(){return {slot:this.inventorySlot,rarity:this.inventoryRarity,sort:this.inventorySort};}
+
+  private renderInventory() {
+    if(this.inventoryReview){this.renderInventoryReview();return;}
+    const options=this.inventoryOptions(),items=inventoryList(this.game,options),pages=Math.max(1,Math.ceil(items.length/6));
+    this.inventoryPage=Math.min(this.inventoryPage,pages-1);
+    this.text(this.node,`背包整理 · ${items.length}/${this.game.bag.length} 件`,0,294,390,38,22,C.gold);
+    this.button(`部位：${SLOT_NAMES[this.inventorySlot]||'全部'}`,-98,245,184,38,()=>{const values=['all',...SLOTS];this.inventorySlot=values[(values.indexOf(this.inventorySlot)+1)%values.length];this.inventoryPage=0;this.render();});
+    this.button(`品质：${RARITIES.find(r=>r.id===this.inventoryRarity)?.name||'全部'}`,98,245,184,38,()=>{const values=['all',...RARITIES.map(r=>r.id)];this.inventoryRarity=values[(values.indexOf(this.inventoryRarity)+1)%values.length];this.inventoryPage=0;this.render();});
+    this.button(`排序：${{power:'基础战力',rarity:'品质优先',newest:'最近入包'}[this.inventorySort]}`,0,198,380,34,()=>{const values=['power','rarity','newest'];this.inventorySort=values[(values.indexOf(this.inventorySort)+1)%values.length];this.inventoryPage=0;this.render();});
+    items.slice(this.inventoryPage*6,this.inventoryPage*6+6).forEach((item:any,i:number)=>{
+      const protectedText=[item.locked?'锁定':'',item.level?`强化 +${item.level}`:'',item.sockets.some(Boolean)?'有宝石':''].filter(Boolean).join(' / ');
+      this.button(`${RARITIES.find(r=>r.id===item.rarity)?.name} · ${SLOT_NAMES[item.slot]} · ${item.name}\n战力 ${itemPower(item)}${protectedText?' · '+protectedText:''}`,0,146-i*48,380,43,()=>{this.selectedItem=item.id;this.inventoryOpen=false;this.forgeOpen=true;this.render();});
+    });
+    if(!items.length)this.text(this.node,'没有符合筛选条件的装备',0,30,380,55,17,C.muted);
+    this.button('‹',-140,-151,50,32,()=>{this.inventoryPage=Math.max(0,this.inventoryPage-1);this.render();});
+    this.text(this.node,`${this.inventoryPage+1}/${pages}`,0,-151,120,30,14,C.muted);
+    this.button('›',140,-151,50,32,()=>{this.inventoryPage=Math.min(pages-1,this.inventoryPage+1);this.render();});
+    this.button('预览换装',-130,-198,122,42,()=>{this.inventoryReview={kind:'equip',plan:autoEquipPlan(this.game),page:0};this.status='';this.render();});
+    this.button('批量合成',0,-198,122,42,()=>{this.inventoryReview={kind:'merge',plan:batchMergePlan(this.game,options),page:0};this.status='';this.render();});
+    this.button('批量分解',130,-198,122,42,()=>{this.inventoryReview={kind:'salvage',plan:batchSalvagePlan(this.game,options),page:0};this.status='';this.render();});
+    this.text(this.node,'批量操作跳过锁定、强化和镶嵌装备\n分解须指定普通/精良/稀有品质；换装检查所有部位',0,-250,390,47,12,C.muted);
+    this.button('返回装备',0,-301,220,36,()=>{this.inventoryOpen=false;this.render();});
+  }
+
+  private renderInventoryReview() {
+    const review=this.inventoryReview,plan=review.plan,kind=review.kind;
+    const rows=kind==='equip'?plan.changes:plan.items,pages=Math.max(1,Math.ceil(rows.length/6));
+    this.text(this.node,kind==='equip'?'确认一键穿戴':kind==='merge'?'确认批量合成':'确认批量分解',0,294,390,38,22,C.gold);
+    const signed=(n:number)=>n>0?`+${n}`:`${n}`;
+    const summary=kind==='equip'?`更换 ${rows.length} 个部位 · 战力 ${signed(plan.after.power-plan.before.power)}\n攻击 ${signed(plan.after.attack-plan.before.attack)} · 生命 ${signed(plan.after.health-plan.before.health)} · 防御 ${signed(plan.after.defense-plan.before.defense)}`:
+      kind==='merge'?`消耗 ${rows.length} 件 → 获得 ${plan.groups.length} 件\n金币 ${plan.cost} / 拥有 ${this.game.gold}`:`分解 ${rows.length} 件 → 获得 ${plan.ore} 铁矿`;
+    this.text(this.node,summary,0,241,390,55,15,C.cyan);
+    const details=kind==='equip'?`暴击 ${signed(Math.round((plan.after.crit-plan.before.crit)*100))}% · 每次恢复 ${signed(plan.after.regen-plan.before.regen)}\n元素抗性 ${signed(Math.round((plan.after.resist-plan.before.resist)*100))}% · 仅按基础战力推荐`:
+      kind==='merge'?'每五件同部位同品质合成，部位保留\n新产物不会继续参与本批合成':plan.allowed?'仅消耗下列未锁定、未强化、无宝石的装备\n分解后无法恢复，可取消返回':'请返回并指定普通、精良或稀有品质';
+    this.text(this.node,details,0,181,390,55,13,C.muted);
+    rows.slice(review.page*6,review.page*6+6).forEach((row:any,i:number)=>{
+      const item=kind==='equip'?row.to:row;
+      const label=kind==='equip'?`${SLOT_NAMES[row.slot]}：${row.from?.name||'空位'} → ${item.name}\n战力 ${itemPower(row.from)} → ${itemPower(item)} · ${row.from?.affix||'无词条'} → ${item.affix||'无词条'}`:
+        `${RARITIES.find(r=>r.id===item.rarity)?.name} · ${SLOT_NAMES[item.slot]} · ${item.name}\n${kind==='merge'?`组 ${Math.floor((review.page*6+i)/5)+1} → ${RARITIES[RARITIES.findIndex(r=>r.id===item.rarity)+1].name}${SLOT_NAMES[item.slot]}`:`基础战力 ${itemPower(item)}`}`;
+      this.box(this.node,`Review${i}`,0,111-i*48,380,43,C.panelLight);
+      this.text(this.node,label,0,111-i*48,370,43,12,C.ink);
+    });
+    if(!rows.length)this.text(this.node,kind==='equip'?'没有更高基础战力的可换装备':kind==='merge'?'没有五件同部位、同品质的安全材料':'没有可批量分解的装备',0,30,380,70,16,C.muted);
+    this.button('‹',-140,-174,50,32,()=>{review.page=Math.max(0,review.page-1);this.render();});
+    this.text(this.node,`清单 ${review.page+1}/${pages}`,0,-174,180,30,14,C.muted);
+    this.button('›',140,-174,50,32,()=>{review.page=Math.min(pages-1,review.page+1);this.render();});
+    this.button('取消',-98,-231,184,44,()=>{this.inventoryReview=null;this.render();});
+    this.button('确认执行',98,-231,184,44,()=>this.action(()=>{
+      if(kind==='equip'){const result=autoEquip(this.game,plan.token);this.status=`已更换 ${result.changes.length} 件装备`;}
+      else if(kind==='merge'){const result=batchMerge(this.game,plan.filters,plan.token);this.status=`合成完成，获得 ${result.length} 件装备`;}
+      else{const ore=batchSalvage(this.game,plan.filters,plan.token);this.status=`分解完成，获得 ${ore} 铁矿`;}
+      this.inventoryReview=null;this.inventoryOpen=false;this.selectedItem=null;this.bagPage=0;
+    }),true);
+    this.text(this.node,this.status,0,-295,390,50,13,C.muted);
   }
 
   private renderGems() {
@@ -569,13 +639,16 @@ export class StarforgeGame extends Component {
       }, this.selectedRarity === rarity.id);
     }
     const candidates = this.game.bag.filter((item: any) => item.rarity === this.selectedRarity);
+    this.bagPage=Math.min(this.bagPage,Math.max(0,Math.ceil(candidates.length/9)-1));
     candidates.slice(this.bagPage * 9, this.bagPage * 9 + 9).forEach((item: any, index: number) => {
       const x = -130 + (index % 3) * 130;
       const y = 153 - Math.floor(index / 3) * 67;
       const selected = this.materials.includes(item.id);
-      this.button(`${selected ? '✓ ' : ''}${item.name}\n${item.locked ? '已锁定' : SLOT_NAMES[item.slot]}`,
+      this.button(`${selected ? '✓ ' : ''}${item.name}${item.level?' +'+item.level:''}\n${item.locked ? '已锁定' : item.sockets.some(Boolean)?'有宝石 · 请先卸下':SLOT_NAMES[item.slot]}`,
         x, y, 121, 61, () => {
           if (item.locked) { this.status = '先到装备页解锁'; this.render(); return; }
+          if (item.sockets.some(Boolean)) { this.status = '先到宝石工坊卸下宝石'; this.render(); return; }
+          this.synthesisConfirmation='';
           this.materials = selected
             ? this.materials.filter(id => id !== item.id)
             : this.materials.length < 5 ? [...this.materials, item.id] : this.materials;
@@ -589,14 +662,25 @@ export class StarforgeGame extends Component {
       this.render();
     });
     this.button('自动选择', -87, -157, 160, 45, () => {
-      this.materials = candidates.filter((item: any) => !item.locked).slice(0, 5).map((item: any) => item.id);
+      const safe=candidates.filter((item:any)=>!item.locked&&!item.level&&!item.sockets.some(Boolean));
+      const sameSlot=SLOTS.map(slot=>safe.filter((item:any)=>item.slot===slot)).find(group=>group.length>=5);
+      this.materials = (sameSlot||safe).slice(0,5).map((item:any)=>item.id);
+      this.synthesisConfirmation='';
+      this.status='自动选择跳过锁定、强化和镶嵌装备，优先保留合成部位';
       this.render();
     });
     this.button('合成装备', 87, -157, 160, 45, () => this.action(() => {
+      const selected=this.materials.map(id=>this.game.bag.find((item:any)=>item.id===id));
+      const confirmation=JSON.stringify(selected);
+      if(selected.some((item:any)=>item?.level)&&this.synthesisConfirmation!==confirmation){this.synthesisConfirmation=confirmation;this.status='材料含强化装备，强化等级不会继承。再次点击“合成装备”确认消耗。';return;}
       const item = synthesize(this.game, this.materials);
-      this.materials = []; this.selectedItem = item.id; this.tab = 'equipment';
+      this.synthesisConfirmation='';
+      this.materials = []; this.selectedItem = item.id; this.tab = 'equipment';this.bagPage=0;
       this.status = `合成成功：${item.name}`;
     }), true);
-    this.text(this.node, this.status, 0, -245, 385, 60, 14, C.muted);
+    const selected=this.materials.map(id=>this.game.bag.find((item:any)=>item.id===id)).filter(Boolean),rank=RARITIES.findIndex(r=>r.id===this.selectedRarity);
+    const same=selected.length===5&&selected.every((item:any)=>item.slot===selected[0].slot);
+    this.text(this.node,`合成需 ${(rank+1)*40} 金币 · 产物为${RARITIES[rank+1]?.name||'最高品质'}\n${same?'保留部位：'+SLOT_NAMES[selected[0].slot]:'五件同部位保留部位，混合材料则随机'}`,0,-217,390,48,14,C.gold);
+    this.text(this.node, this.status, 0, -287, 385, 65, 13, C.muted);
   }
 }
