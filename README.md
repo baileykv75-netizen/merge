@@ -34,7 +34,7 @@ npm run export:cocos-web
 
 ## GitHub Pages
 
-仓库：[baileykv75-netizen/merge](https://github.com/baileykv75-netizen/merge)。`.github/workflows/pages.yml` 在推送到 `main` 时执行测试并发布 `docs`。仓库的 Settings → Pages → Build and deployment 应设为 **GitHub Actions**。
+仓库：[baileykv75-netizen/merge](https://github.com/baileykv75-netizen/merge)。[打开网页试玩](https://baileykv75-netizen.github.io/merge/)。`.github/workflows/pages.yml` 在推送到 `main` 时执行测试并发布 `docs`。仓库的 Settings → Pages → Build and deployment 已设为 **GitHub Actions**。
 
 ## 边界
 
