@@ -34,6 +34,7 @@ export class StarforgeGame extends Component {
   private bagPage = 0;
   private status = '点击挑战，获得装备并开始合成。';
   private frames: Record<string, SpriteFrame> = {};
+  private artErrors = new Set<string>();
   private combatClock = 0;
   private combatSpeed = 1;
   private forgeOpen = false;
@@ -85,10 +86,17 @@ export class StarforgeGame extends Component {
     this.save();
     this.schedule(() => { syncTime(this.game); this.save(); this.render(); }, 30);
     this.render();
+    this.loadArt();
+  }
+
+  private loadArt() {
+    this.artErrors.clear();
     for (const name of ['hero-sky-knight', 'void-beast', 'battle-observatory']) {
+      if (this.frames[name]) continue;
       resources.load(`art/${name}/spriteFrame`, SpriteFrame, (error, frame) => {
-        if (error || !frame || !isValid(this.node)) return;
-        this.frames[name] = frame;
+        if (!isValid(this.node)) return;
+        if (error || !frame) this.artErrors.add(name);
+        else this.frames[name] = frame;
         this.render();
       });
     }
@@ -197,6 +205,12 @@ export class StarforgeGame extends Component {
     this.picture('battle-observatory', 0, 95, 394, 375);
     const hero = this.picture('hero-sky-knight', -92, 52, 178, 250);
     const enemy = this.picture('void-beast', 100, 80, 164, 174);
+    if (Object.keys(this.frames).length < 3) {
+      this.box(this.node, 'ArtLoading', 0, 88, 330, 120, C.panel);
+      this.text(this.node, this.artErrors.size ? '部分画面未能加载，请重试' : `正在加载角色与场景 · ${Object.keys(this.frames).length}/3`, 0, 110, 320, 42, 16, C.ink);
+      if (this.artErrors.size) this.button('重新加载画面', 0, 62, 210, 38, () => { this.loadArt(); this.render(); });
+      else this.text(this.node, '首次进入需要下载画面，请稍候', 0, 64, 320, 36, 13, C.muted);
+    }
     this.text(this.node, `${dungeon ? dungeon.name : `第 ${this.stage} 关`} · ${fight ? `第 ${fight.wave}/${fight.result.waveCount} 波` : '试炼场'}`, 0, 249, 360, 35, 21, C.gold);
     const event = fight?.last;
     if (running && event && ['hero', 'enemy'].includes(event.type)) {
