@@ -6,6 +6,7 @@ import {
   SLOTS, SLOT_NAMES, RARITIES, newGame, restoreGame, heroStats,
   itemStats, equip, toggleLock, synthesize, enhance, startEncounter, advanceEncounter, closeEncounter, encounterView,
   syncTime, idleReward, claimIdle, TALENTS, talentCost, upgradeTalent, DAILY_TASKS, claimDaily, salvage,
+  findItem, baseRange, forgeQuote, rollForge, resolveForge, compareItem, transferQuote, transferEnhancement,
 } from './core/game-core';
 
 const { ccclass } = _decorator;
@@ -32,6 +33,7 @@ export class StarforgeGame extends Component {
   private frames: Record<string, SpriteFrame> = {};
   private combatClock = 0;
   private combatSpeed = 1;
+  private forgeOpen = false;
 
   update(dt: number) {
     const fight = this.game?.encounter;
@@ -45,12 +47,13 @@ export class StarforgeGame extends Component {
   }
 
   private switchTab(tab: 'adventure' | 'equipment' | 'synthesis' | 'camp') {
+    if (this.game.pendingForge) { this.tab = 'equipment'; this.forgeOpen = true; this.render(); return; }
     if (this.game.encounter) {
       const view = encounterView(this.game);
       if (!view.done) return;
       closeEncounter(this.game); this.save();
     }
-    this.tab = tab; this.bagPage = 0;
+    this.tab = tab; this.bagPage = 0; this.forgeOpen = false;
     syncTime(this.game); this.render();
   }
 
@@ -59,6 +62,7 @@ export class StarforgeGame extends Component {
       this.game = restoreGame(JSON.parse(sys.localStorage.getItem(SAVE_KEY) || 'null')) || newGame();
     } catch { this.game = newGame(); }
     this.stage = this.game.encounter?.result.stage || this.game.stageUnlocked;
+    if (this.game.pendingForge) { this.tab = 'equipment'; this.forgeOpen = true; this.selectedItem = this.game.pendingForge.itemId; }
     syncTime(this.game);
     this.save();
     this.schedule(() => { syncTime(this.game); this.save(); this.render(); }, 30);
@@ -194,7 +198,7 @@ export class StarforgeGame extends Component {
     this.text(this.node, notice, 0, -83, 380, 30, 14, fight?.done ? C.gold : C.ink);
     if (fight) {
       this.text(this.node, running ? `强力突刺：${3 - fight.attacks % 3} 次攻击后释放 · 自动战斗中` :
-        `金币 +${fight.result.rewards.gold} · 铁矿 +${fight.result.rewards.ore} · 装备 +${fight.result.rewards.items.length}`,
+        `金币 +${fight.result.rewards.gold} · 铁矿 +${fight.result.rewards.ore} · 装备 +${fight.result.rewards.items.length}\n重铸石 +${fight.result.rewards.shards || 0} · 洗练尘 +${fight.result.rewards.dust || 0}`,
         0, -135, 390, 42, 14, C.muted);
       if (running) {
         this.button(`战斗速度 ×${this.combatSpeed}`, 0, -198, 250, 50, () => { this.combatSpeed = this.combatSpeed === 1 ? 2 : 1; this.render(); });
@@ -232,6 +236,7 @@ export class StarforgeGame extends Component {
   }
 
   private renderEquipment() {
+    if (this.forgeOpen && findItem(this.game, this.selectedItem)) { this.renderForge(); return; }
     this.text(this.node, `装备栏 · 战力 ${heroStats(this.game).power}`, 0, 293, 380, 30, 19, C.gold);
     SLOTS.forEach((slot: string, index: number) => {
       const item = this.game.equipped[slot];
@@ -263,24 +268,68 @@ export class StarforgeGame extends Component {
       this.text(this.node, `${item.name} +${item.level}  ·  攻 ${s.attack} / 生 ${s.health} / 防 ${s.defense}`,
         0, -196, 390, 35, 13, C.ink);
       if (bagItem) {
+        const delta = compareItem(this.game, item);
+        const signed = (n: number) => n > 0 ? `+${n}` : `${n}`;
+        this.text(this.node, `换装：攻击 ${signed(delta.attack)} · 生命 ${signed(delta.health)} · 防御 ${signed(delta.defense)}`,
+          0, -219, 390, 24, 12, delta.power >= 0 ? C.green : C.red);
+      }
+      if (bagItem) {
         this.button('穿戴', -130, -246, 120, 42, () => this.action(() => {
           equip(this.game, bagItem.id); this.status = '穿戴成功';
         }), true);
         this.button(item.locked ? '解锁' : '锁定', 0, -246, 120, 42, () => this.action(() => {
           toggleLock(this.game, bagItem.id);
         }));
-        this.button('分解换铁矿', 130, -246, 120, 42, () => this.action(() => {
-          const ore = salvage(this.game, [bagItem.id]); this.selectedItem = null;
-          this.bagPage = Math.min(this.bagPage, Math.max(0, Math.ceil(this.game.bag.length / 9) - 1));
-          this.status = `分解获得 ${ore} 铁矿`;
-        }));
+        this.button('详情 / 锻造', 130, -246, 120, 42, () => { this.forgeOpen = true; this.render(); });
       } else {
-        this.button('强化 +1', 0, -246, 220, 42, () => this.action(() => {
+        this.button('强化 +1', -100, -246, 180, 42, () => this.action(() => {
           enhance(this.game, equippedSlot!); this.status = `${item.name} 强化成功`;
         }), true);
+        this.button('详情 / 锻造', 100, -246, 180, 42, () => { this.forgeOpen = true; this.render(); });
       }
     }
     this.text(this.node, this.status, 0, -303, 385, 40, 13, C.muted);
+  }
+
+  private renderForge() {
+    const item = findItem(this.game, this.selectedItem);
+    if (!item) return;
+    const stats = itemStats(item), range = baseRange(item);
+    const line = (s: any) => `攻击 ${s.attack} · 生命 ${s.health} · 防御 ${s.defense}`;
+    this.text(this.node, `${item.name} +${item.level} · 锻造台`, 0, 290, 390, 40, 21, C.gold);
+    this.text(this.node, `${RARITIES.find(r => r.id === item.rarity)?.name} · ${SLOT_NAMES[item.slot]}${item.locked ? ' · 已锁定' : ''}\n${line(stats)}`, 0, 238, 390, 60, 15);
+    this.text(this.node, `未强化基础范围\n攻击 ${range.min.attack}–${range.max.attack} · 生命 ${range.min.health}–${range.max.health} · 防御 ${range.min.defense}–${range.max.defense}`, 0, 179, 390, 52, 13, C.muted);
+    const affix = item.affix === '暴击' ? '暴击概率 +4%' : item.affix === '生命恢复' ? '每次受击存活后恢复 2 生命' : item.affix === '元素抗性' ? '元素波次伤害减少 5%' : '无词条（精良以上装备拥有词条）';
+    this.text(this.node, affix, 0, 133, 390, 30, 14, C.cyan);
+    this.text(this.node, `重铸石 ${this.game.shards} · 洗练尘 ${this.game.dust}\n重铸石：第 3 关起掉落；洗练尘：第 5 关起掉落`, 0, 89, 390, 50, 13, C.muted);
+    const pending = this.game.pendingForge;
+    if (pending) {
+      this.text(this.node, pending.kind === 'reforge' ? `原基础：${line(item)}\n新基础：${line(pending.stats)}` : `原词条：${item.affix}\n新词条：${pending.affix}`, 0, -5, 390, 100, 16);
+      this.text(this.node, '材料已消耗。本次选择不再扣费。\n保留旧属性不会返还材料。', 0, -92, 380, 55, 14, C.muted);
+      this.button('保留旧属性', -98, -164, 180, 50, () => this.action(() => { resolveForge(this.game, false); this.status = '已保留原属性'; }));
+      this.button('采用新属性', 98, -164, 180, 50, () => this.action(() => { resolveForge(this.game, true); this.status = '新属性已生效'; }), true);
+    } else {
+      const reforge = forgeQuote(item, 'reforge'), wash = forgeQuote(item, 'wash');
+      this.button(`重铸基础 · ${reforge.gold} 金币 + ${reforge.amount} 重铸石`, 0, 24, 380, 44,
+        () => this.action(() => { rollForge(this.game, item.id, 'reforge'); this.status = '比较属性后选择是否采用'; }));
+      this.button(`洗练词条 · ${wash.gold} 金币 + ${wash.amount} 洗练尘`, 0, -30, 380, 44,
+        () => this.action(() => { rollForge(this.game, item.id, 'wash'); this.status = '选择保留或采用新词条'; }));
+      if (this.game.bag.some((x: any) => x.id === item.id)) {
+        let quote: any;
+        try { quote = transferQuote(this.game, item.id); } catch {}
+        this.button(quote ? `继承已穿戴装备 +${quote.source.level} · ${quote.gold} 金币\n原装备变为 +${item.level}，两件装备均保留` : '强化继承：需穿戴同部位且强化更高的装备', 0, -96, 380, 62,
+          () => this.action(() => { transferEnhancement(this.game, item.id); this.status = '强化等级已交换，新装备可穿戴'; }));
+        const refund = 5 * (RARITIES.findIndex(r => r.id === item.rarity) + 1) + item.level * 3;
+        this.button(`分解此装备 → ${refund} 铁矿（消耗装备）`, 0, -163, 380, 44, () => this.action(() => {
+          const ore = salvage(this.game, [item.id]); this.forgeOpen = false; this.selectedItem = null; this.bagPage = 0; this.status = `分解获得 ${ore} 铁矿`;
+        }));
+      } else {
+        this.button(`强化 +1 · ${30*(item.level+1)} 金币 + ${10*(item.level+1)} 铁矿`, 0, -96, 380, 44,
+          () => this.action(() => { enhance(this.game,item.slot); this.status = '强化成功'; }), true);
+      }
+      this.button('返回装备', 0, -227, 220, 42, () => { this.forgeOpen = false; this.render(); });
+    }
+    this.text(this.node, this.status, 0, -292, 385, 50, 13, C.muted);
   }
 
   private renderCamp() {

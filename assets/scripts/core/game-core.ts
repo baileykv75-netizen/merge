@@ -1,7 +1,7 @@
 // @ts-nocheck
 /** 装备合成原型的跨平台规则。只使用标准 JavaScript，网页和 Cocos 共用。 */
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 export const ENERGY_CAP = 30;
 export const ENERGY_INTERVAL = 5 * 60 * 1000;
 export const OFFLINE_CAP = 8 * 60 * 60 * 1000;
@@ -83,6 +83,8 @@ export function newGame(seed = Date.now(), now = Date.now()) {
     bestStage: 0,
     gold: 120,
     ore: 25,
+    shards: 0,
+    dust: 0,
     energy: 30,
     bag: [],
     equipped: Object.fromEntries(SLOTS.map((slot) => [slot, null])),
@@ -132,6 +134,7 @@ export function heroStats(state) {
 
 /** @param {any} state @param {string} id */
 export function equip(state, id) {
+  guardForge(state);
   const index = state.bag.findIndex((item) => item.id === id);
   if (index < 0) throw new Error("背包中没有这件装备");
   const [selected] = state.bag.splice(index, 1);
@@ -143,6 +146,7 @@ export function equip(state, id) {
 
 /** @param {any} state @param {string} id */
 export function toggleLock(state, id) {
+  guardForge(state);
   const item = state.bag.find((candidate) => candidate.id === id);
   if (!item) throw new Error("只能锁定背包中的装备");
   item.locked = !item.locked;
@@ -151,6 +155,7 @@ export function toggleLock(state, id) {
 
 /** @param {any} state @param {string[]} ids */
 export function synthesize(state, ids, now = Date.now()) {
+  guardForge(state);
   if (!Array.isArray(ids) || ids.length !== 5 || new Set(ids).size !== 5) {
     throw new Error("必须选择 5 件不同的装备");
   }
@@ -180,6 +185,7 @@ export function synthesize(state, ids, now = Date.now()) {
 
 /** @param {any} state @param {string} slot */
 export function enhance(state, slot, now = Date.now()) {
+  guardForge(state);
   const item = state.equipped[slot];
   if (!item) throw new Error("请先穿戴装备");
   if (item.level >= 10) throw new Error("当前版本强化已达到上限");
@@ -198,6 +204,7 @@ export function enhance(state, slot, now = Date.now()) {
 
 /** @param {any} state @param {number} stage */
 export function battle(state, stage, now = Date.now()) {
+  guardForge(state);
   if (state.encounter) throw new Error('请先完成当前战斗');
   if (!Number.isInteger(stage) || stage < 1 || stage > 10 || stage > state.stageUnlocked) {
     throw new Error("关卡尚未开放");
@@ -234,6 +241,10 @@ export function battle(state, stage, now = Date.now()) {
     if (heroHp <= 0 || turn >= 100) { won = false; break; }
   }
   const rewards = { gold: won ? 35 + stage * 18 : 10 + stage * 3, ore: won ? 3 + stage : 0, items: [] };
+  rewards.shards = won && stage >= 3 ? 1 + Math.floor(stage / 5) : 0;
+  rewards.dust = won && stage >= 5 ? 1 + Math.floor(stage / 7) : 0;
+  state.shards += rewards.shards;
+  state.dust += rewards.dust;
   state.gold += rewards.gold;
   state.ore += rewards.ore;
   if (won) {
@@ -261,7 +272,7 @@ export function battle(state, stage, now = Date.now()) {
 
 /** @param {unknown} value */
 export function restoreGame(value, now = Date.now()) {
-  if (!value || typeof value !== "object" || ![1, SAVE_VERSION].includes(value.version)) return null;
+  if (!value || typeof value !== "object" || ![1, 2, SAVE_VERSION].includes(value.version)) return null;
   if (!Array.isArray(value.bag) || !value.equipped || !Number.isInteger(value.seed)) return null;
   if (!Number.isInteger(value.stageUnlocked) || value.stageUnlocked < 1 || value.stageUnlocked > 10) return null;
   const validNumber = n => Number.isSafeInteger(n) && n >= 0;
@@ -282,11 +293,14 @@ export function restoreGame(value, now = Date.now()) {
     || ![null, '暴击', '生命恢复', '元素抗性'].includes(item.affix))) return null;
   if (new Set(all.map(x => x.id)).size !== all.length) return null;
   const state = JSON.parse(JSON.stringify(value));
+  const oldVersion = state.version;
   if (state.version === 1) {
     Object.assign(state, { version: SAVE_VERSION, clock: now, energyAt: now, idleAt: now, idleOreRemainder: 0,
       talents: { attack: 0, health: 0, defense: 0 },
       daily: { day: dayKey(now), wins: 0, merges: 0, upgrades: 0, claimed: [] } });
   }
+  if (oldVersion < 3) { state.shards = 0; state.dust = 0; state.version = SAVE_VERSION; }
+  if (!validNumber(state.shards) || !validNumber(state.dust)) return null;
   if (!['clock', 'energyAt', 'idleAt'].every(k => validNumber(state[k]))) return null;
   if (!validNumber(state.idleOreRemainder) || state.idleOreRemainder >= 5) return null;
   if (!state.talents || TALENTS.some(t => !validNumber(state.talents[t.id]) || state.talents[t.id] > t.max)) return null;
@@ -295,6 +309,16 @@ export function restoreGame(value, now = Date.now()) {
     || !Array.isArray(d.claimed) || new Set(d.claimed).size !== d.claimed.length
     || d.claimed.some(id => !DAILY_TASKS.some(t => t.id === id))) return null;
   if (state.encounter != null && !validEncounter(state.encounter)) return null;
+  if (state.pendingForge != null) {
+    const p = state.pendingForge;
+    const item = findItem(state, p.itemId);
+    if (!item || item.locked || state.encounter || !['reforge','wash'].includes(p.kind)) return null;
+    if (p.kind === 'wash' && (!item.affix || !['暴击','生命恢复','元素抗性'].includes(p.affix))) return null;
+    if (p.kind === 'reforge') {
+      const range = baseRange(item);
+      if (!p.stats || ['attack','health','defense'].some(k => !validNumber(p.stats[k]) || p.stats[k] < range.min[k] || p.stats[k] > range.max[k])) return null;
+    }
+  }
   return state;
 }
 
@@ -402,6 +426,7 @@ export function claimDaily(state, id, now = Date.now()) {
   return task;
 }
 export function salvage(state, ids) {
+  guardForge(state);
   if (!Array.isArray(ids) || !ids.length || new Set(ids).size !== ids.length) throw new Error('请选择不同的背包装备');
   const items = ids.map(id => state.bag.find(item => item.id === id));
   if (items.some(item => !item || item.locked)) throw new Error('已穿戴或锁定的装备不能分解');
@@ -409,4 +434,86 @@ export function salvage(state, ids) {
   state.bag = state.bag.filter(item => !ids.includes(item.id));
   state.ore += ore;
   return ore;
+}
+
+function guardForge(state) {
+  if (state.pendingForge) throw new Error('请先在锻造台决定保留旧属性或采用新属性');
+}
+export function findItem(state, id) {
+  return [...state.bag, ...Object.values(state.equipped)].find(item => item?.id === id) || null;
+}
+function baseFor(item, primary) {
+  return { attack: ['weapon','ring','amulet'].includes(item.slot) ? primary : 0,
+    health: ['armor','helmet','amulet'].includes(item.slot) ? primary * 5 : 0,
+    defense: ['boots','helmet','armor'].includes(item.slot) ? Math.round(primary * 0.55) : 0 };
+}
+export function baseRange(item) {
+  const rank = RARITIES.findIndex(r => r.id === item.rarity);
+  const base = (5 + rank * 3) * RARITIES[rank].scale;
+  return { min: baseFor(item, Math.round(base * 0.85)), max: baseFor(item, Math.round(base * 1.15)) };
+}
+export function forgeQuote(item, kind) {
+  if (!['reforge','wash'].includes(kind)) throw new Error('锻造类型无效');
+  const rank = RARITIES.findIndex(r => r.id === item.rarity);
+  return { gold: (kind === 'reforge' ? 60 : 80) * (rank + 1),
+    material: kind === 'reforge' ? 'shards' : 'dust', amount: rank + 2 };
+}
+export function rollForge(state, id, kind) {
+  guardForge(state);
+  if (state.encounter) throw new Error('请先完成当前战斗');
+  const item = findItem(state, id);
+  if (!item) throw new Error('装备不存在');
+  if (item.locked) throw new Error('请先解锁装备');
+  if (kind === 'wash' && !item.affix) throw new Error('精良及以上装备才有可洗练词条');
+  const quote = forgeQuote(item, kind);
+  if (state.gold < quote.gold || state[quote.material] < quote.amount) throw new Error('金币或锻造材料不足');
+  const offer = { itemId: id, kind };
+  if (kind === 'wash') {
+    const choices = ['暴击','生命恢复','元素抗性'].filter(x => x !== item.affix);
+    offer.affix = choices[pick(state, choices.length)];
+  } else {
+    const rank = RARITIES.findIndex(r => r.id === item.rarity);
+    const primary = Math.round((5 + rank * 3) * RARITIES[rank].scale * (0.85 + random(state) * 0.3));
+    offer.stats = baseFor(item, primary);
+  }
+  state.gold -= quote.gold; state[quote.material] -= quote.amount;
+  state.pendingForge = offer;
+  return offer;
+}
+export function resolveForge(state, accept) {
+  if (typeof accept !== 'boolean') throw new Error('请选择采用或保留');
+  const p = state.pendingForge;
+  if (!p) throw new Error('没有待确认的锻造结果');
+  const item = findItem(state, p.itemId);
+  if (!item) throw new Error('装备不存在');
+  if (accept) {
+    if (p.kind === 'wash') item.affix = p.affix;
+    else Object.assign(item, p.stats);
+  }
+  state.pendingForge = null;
+  return item;
+}
+export function compareItem(state, item) {
+  const before = heroStats(state);
+  const after = heroStats({...state, equipped: {...state.equipped, [item.slot]: item}});
+  return { before, after, attack: after.attack-before.attack, health: after.health-before.health,
+    defense: after.defense-before.defense, power: after.power-before.power,
+    crit: after.crit-before.crit, regen: after.regen-before.regen, resist: after.resist-before.resist };
+}
+export function transferQuote(state, targetId) {
+  const target = state.bag.find(item => item.id === targetId);
+  if (!target) throw new Error('请选择背包内的新装备');
+  const source = state.equipped[target.slot];
+  if (!source || source.level <= target.level) throw new Error('当前穿戴装备的强化等级必须高于新装备');
+  if (source.locked || target.locked) throw new Error('请先解锁两件装备');
+  return { source, target, gold: source.level * 40 };
+}
+export function transferEnhancement(state, targetId) {
+  guardForge(state);
+  if (state.encounter) throw new Error('请先完成当前战斗');
+  const {source,target,gold} = transferQuote(state,targetId);
+  if (state.gold < gold) throw new Error(`金币不足，需要 ${gold}`);
+  state.gold -= gold;
+  [source.level,target.level] = [target.level,source.level];
+  return target;
 }
