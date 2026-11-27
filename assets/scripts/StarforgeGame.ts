@@ -5,6 +5,7 @@ import {
 import {
   SLOTS, SLOT_NAMES, RARITIES, newGame, restoreGame, heroStats,
   itemStats, equip, toggleLock, synthesize, enhance, battle,
+  syncTime, idleReward, claimIdle, TALENTS, talentCost, upgradeTalent, DAILY_TASKS, claimDaily, salvage,
 } from './core/game-core';
 
 const { ccclass } = _decorator;
@@ -21,7 +22,7 @@ const C = {
 @ccclass('StarforgeGame')
 export class StarforgeGame extends Component {
   private game: any = null;
-  private tab: 'adventure' | 'equipment' | 'synthesis' = 'adventure';
+  private tab: 'adventure' | 'equipment' | 'synthesis' | 'camp' = 'adventure';
   private stage = 1;
   private selectedItem: string | null = null;
   private selectedRarity = 'common';
@@ -35,6 +36,9 @@ export class StarforgeGame extends Component {
       this.game = restoreGame(JSON.parse(sys.localStorage.getItem(SAVE_KEY) || 'null')) || newGame();
     } catch { this.game = newGame(); }
     this.stage = this.game.stageUnlocked;
+    syncTime(this.game);
+    this.save();
+    this.schedule(() => { syncTime(this.game); this.save(); this.render(); }, 30);
     this.render();
     for (const name of ['hero-sky-knight', 'void-beast', 'battle-observatory']) {
       resources.load(`art/${name}/spriteFrame`, SpriteFrame, (error, frame) => {
@@ -129,10 +133,12 @@ export class StarforgeGame extends Component {
     if (this.tab === 'adventure') this.renderAdventure();
     if (this.tab === 'equipment') this.renderEquipment();
     if (this.tab === 'synthesis') this.renderSynthesis();
+    if (this.tab === 'camp') this.renderCamp();
     this.box(this.node, 'Nav', 0, -365, 420, 72, C.panel, C.line);
-    this.button('冒险', -135, -365, 116, 46, () => { this.tab = 'adventure'; this.render(); }, this.tab === 'adventure');
-    this.button('装备', 0, -365, 116, 46, () => { this.tab = 'equipment'; this.render(); }, this.tab === 'equipment');
-    this.button('合成', 135, -365, 116, 46, () => { this.tab = 'synthesis'; this.render(); }, this.tab === 'synthesis');
+    this.button('冒险', -153, -365, 94, 46, () => { this.tab = 'adventure'; this.render(); }, this.tab === 'adventure');
+    this.button('装备', -51, -365, 94, 46, () => { this.tab = 'equipment'; this.bagPage = 0; this.render(); }, this.tab === 'equipment');
+    this.button('合成', 51, -365, 94, 46, () => { this.tab = 'synthesis'; this.bagPage = 0; this.render(); }, this.tab === 'synthesis');
+    this.button('营地', 153, -365, 94, 46, () => { this.tab = 'camp'; syncTime(this.game); this.render(); }, this.tab === 'camp');
   }
 
   private renderAdventure() {
@@ -154,7 +160,7 @@ export class StarforgeGame extends Component {
     this.button('开始挑战', 0, -194, 250, 55, () => this.action(() => {
       const result = battle(this.game, this.stage);
       this.status = result.won
-        ? `通关！金币 +${result.rewards.gold}，铁矿 +${result.rewards.ore}，装备 +2`
+        ? `通关！金币 +${result.rewards.gold}，铁矿 +${result.rewards.ore}，装备 +${result.rewards.items.length}${result.rewards.recycled ? '（背包已满，多余装备自动分解）' : ''}`
         : `挑战失败，获得 ${result.rewards.gold} 金币；强化后再试。`;
       if (result.won) this.stage = Math.min(10, this.stage + 1);
     }), true);
@@ -193,11 +199,16 @@ export class StarforgeGame extends Component {
       this.text(this.node, `${item.name} +${item.level}  ·  攻 ${s.attack} / 生 ${s.health} / 防 ${s.defense}`,
         0, -196, 390, 35, 13, C.ink);
       if (bagItem) {
-        this.button('穿戴', -86, -246, 150, 42, () => this.action(() => {
+        this.button('穿戴', -130, -246, 120, 42, () => this.action(() => {
           equip(this.game, bagItem.id); this.status = '穿戴成功';
         }), true);
-        this.button(item.locked ? '解锁' : '锁定', 86, -246, 150, 42, () => this.action(() => {
+        this.button(item.locked ? '解锁' : '锁定', 0, -246, 120, 42, () => this.action(() => {
           toggleLock(this.game, bagItem.id);
+        }));
+        this.button('分解换铁矿', 130, -246, 120, 42, () => this.action(() => {
+          const ore = salvage(this.game, [bagItem.id]); this.selectedItem = null;
+          this.bagPage = Math.min(this.bagPage, Math.max(0, Math.ceil(this.game.bag.length / 9) - 1));
+          this.status = `分解获得 ${ore} 铁矿`;
         }));
       } else {
         this.button('强化 +1', 0, -246, 220, 42, () => this.action(() => {
@@ -206,6 +217,26 @@ export class StarforgeGame extends Component {
       }
     }
     this.text(this.node, this.status, 0, -303, 385, 40, 13, C.muted);
+  }
+
+  private renderCamp() {
+    const reward = idleReward(this.game);
+    this.text(this.node, '营地 · 补给与训练', 0, 292, 390, 34, 21, C.gold);
+    this.text(this.node, '体力每 5 分钟恢复 1 点，上限 30\n离线收益最多积累 8 小时', 0, 245, 390, 52, 14, C.muted);
+    this.button(`领取收益：${reward.gold} 金币 / ${reward.ore} 铁矿`, 0, 191, 380, 42,
+      () => this.action(() => { const r = claimIdle(this.game); this.status = `已领取 ${r.gold} 金币、${r.ore} 铁矿`; }), true);
+    TALENTS.forEach((t, i) => {
+      const level = this.game.talents[t.id];
+      this.button(`${t.name} ${level}/${t.max} · ${t.description} · ${talentCost(this.game, t.id)} 金币`, 0, 128 - i * 53, 380, 45,
+        () => this.action(() => { upgradeTalent(this.game, t.id); this.status = `${t.name}升级成功`; }));
+    });
+    this.text(this.node, '每日委托 · 每天 00:00 刷新', 0, -31, 380, 30, 17, C.gold);
+    DAILY_TASKS.forEach((t, i) => {
+      const claimed = this.game.daily.claimed.includes(t.id);
+      this.button(`${t.name} ${Math.min(t.target, this.game.daily[t.id])}/${t.target}\n${claimed ? '已领取' : `${t.gold} 金币 + ${t.ore} 铁矿`}`, 0, -86 - i * 65, 380, 57,
+        () => this.action(() => { claimDaily(this.game, t.id); this.status = '委托奖励已领取'; }), !claimed && this.game.daily[t.id] >= t.target);
+    });
+    this.text(this.node, this.status, 0, -294, 385, 54, 14, C.muted);
   }
 
   private renderSynthesis() {
