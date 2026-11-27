@@ -1,12 +1,19 @@
 // @ts-nocheck
 /** 装备合成原型的跨平台规则。只使用标准 JavaScript，网页和 Cocos 共用。 */
 
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
+export const GEM_TYPES = [
+  {id:'ruby',name:'赤晶',stat:'attack',label:'攻击',base:3,slots:['weapon','ring','amulet']},
+  {id:'emerald',name:'翠晶',stat:'health',label:'生命',base:20,slots:['helmet','armor','amulet']},
+  {id:'sapphire',name:'蓝晶',stat:'defense',label:'防御',base:2,slots:['helmet','armor','boots']},
+];
+function emptyGems() { return Object.fromEntries(GEM_TYPES.flatMap(g => [1,2,3,4,5].map(tier => [`${g.id}:${tier}`,0]))); }
 export const DUNGEONS = [
   {id:'gold', name:'盗匪营地', resource:'金币', unlock:2, rewards:[180,450,900], mechanic:'盗匪每三次攻击发动伏击，伤害翻倍'},
   {id:'ore', name:'铁甲矿坑', resource:'铁矿', unlock:2, rewards:[25,60,120], mechanic:'矿坑守卫生命提高，护甲抵消 18% 伤害'},
   {id:'shards', name:'熔火遗迹', resource:'重铸石', unlock:3, rewards:[5,10,18], mechanic:'敌人造成元素伤害，每三次攻击发动灼烧'},
   {id:'dust', name:'幽雾林地', resource:'洗练尘', unlock:5, rewards:[5,10,18], mechanic:'敌人每三次攻击恢复 10% 生命'},
+  {id:'gems', name:'晶簇洞窟', resource:'宝石', unlock:4, rewards:[5,10,15], mechanic:'晶簇守卫每三次攻击发动碎晶重击，胜利获得一组同类一级宝石'},
 ];
 export const DIFFICULTIES = ['普通','困难','噩梦'];
 export const ENERGY_CAP = 30;
@@ -72,6 +79,7 @@ export function makeItem(state, rarity = "common", forcedSlot) {
     rarity: RARITIES[rank].id,
     level: 0,
     locked: false,
+    sockets: [null],
     attack: slot === "weapon" || slot === "ring" || slot === "amulet" ? primary : 0,
     health: slot === "armor" || slot === "helmet" || slot === "amulet" ? primary * 5 : 0,
     defense: slot === "boots" || slot === "helmet" || slot === "armor" ? Math.round(primary * 0.55) : 0,
@@ -92,6 +100,7 @@ export function newGame(seed = Date.now(), now = Date.now()) {
     ore: 25,
     shards: 0,
     dust: 0,
+    gems: emptyGems(),
     energy: 30,
     bag: [],
     equipped: Object.fromEntries(SLOTS.map((slot) => [slot, null])),
@@ -115,11 +124,16 @@ export function newGame(seed = Date.now(), now = Date.now()) {
 export function itemStats(item) {
   if (!item) return { attack: 0, health: 0, defense: 0 };
   const boost = 1 + (item.level || 0) * 0.12;
-  return {
+  const stats = {
     attack: whole(item.attack * boost),
     health: whole(item.health * boost),
     defense: whole(item.defense * boost),
   };
+  for (const gem of item.sockets || []) if (gem) {
+    const type = GEM_TYPES.find(g => g.id === gem.type);
+    if (type) stats[type.stat] += type.base * 2 ** (gem.tier - 1);
+  }
+  return stats;
 }
 
 /** @param {any} state */
@@ -172,6 +186,7 @@ export function synthesize(state, ids, now = Date.now()) {
   const selected = ids.map((id) => state.bag.find((item) => item.id === id));
   if (selected.some((item) => !item)) throw new Error("材料必须都在背包中");
   if (selected.some((item) => item.locked)) throw new Error("锁定的装备不能用于合成");
+  if (selected.some(item => item.sockets?.some(Boolean))) throw new Error('请先卸下材料装备中的宝石');
   const rank = RARITIES.findIndex((rarity) => rarity.id === selected[0].rarity);
   if (rank < 0 || rank >= RARITIES.length - 1) throw new Error("该品质无法继续合成");
   if (selected.some((item) => item.rarity !== selected[0].rarity)) {
@@ -274,8 +289,8 @@ function simulateCombat(state, stage, profile = null) {
       enemyHp = Math.max(0, enemyHp - damage);
       events.push({ type: "hero", wave, damage, skill, critical, enemyHp });
       if (enemyHp <= 0) break;
-      const ability = turn % 3 === 0 && profile === 'gold' ? '伏击' : turn % 3 === 0 && profile === 'shards' ? '灼烧' : '';
-      const multiplier = ability === '伏击' ? 2 : ability === '灼烧' ? 1.5 : 1;
+      const ability = turn % 3 === 0 && profile === 'gold' ? '伏击' : turn % 3 === 0 && profile === 'shards' ? '灼烧' : turn % 3 === 0 && profile === 'gems' ? '碎晶重击' : '';
+      const multiplier = ability === '伏击' ? 2 : ability ? 1.5 : 1;
       const taken = Math.max(1, Math.round((enemyDamage * multiplier * (0.9 + random(state) * 0.2) - hero.defense * 0.22) * (profile === 'shards' || wave % 2 === 0 ? 1 - hero.resist : 1)));
       heroHp = Math.max(0, heroHp - taken);
       events.push({ type: "enemy", wave, damage: taken, heroHp, ability });
@@ -296,7 +311,7 @@ function simulateCombat(state, stage, profile = null) {
 
 /** @param {unknown} value */
 export function restoreGame(value, now = Date.now()) {
-  if (!value || typeof value !== "object" || ![1, 2, 3, SAVE_VERSION].includes(value.version)) return null;
+  if (!value || typeof value !== "object" || ![1, 2, 3, 4, SAVE_VERSION].includes(value.version)) return null;
   if (!Array.isArray(value.bag) || !value.equipped || !Number.isInteger(value.seed)) return null;
   if (!Number.isInteger(value.stageUnlocked) || value.stageUnlocked < 1 || value.stageUnlocked > 10) return null;
   const validNumber = n => Number.isSafeInteger(n) && n >= 0;
@@ -329,6 +344,18 @@ export function restoreGame(value, now = Date.now()) {
     state.dungeonAttempts = Object.fromEntries(DUNGEONS.map(d => [d.id, 0]));
     state.dungeonClears = Object.fromEntries(DUNGEONS.map(d => [d.id, -1]));
     state.version = SAVE_VERSION;
+  }
+  if (oldVersion < 5) {
+    state.gems = emptyGems(); state.version = SAVE_VERSION;
+    if (state.dungeonAttempts) state.dungeonAttempts.gems = 0;
+    if (state.dungeonClears) state.dungeonClears.gems = -1;
+    for (const item of [...state.bag,...Object.values(state.equipped)].filter(Boolean)) item.sockets = [null];
+  }
+  const gemKeys = Object.keys(emptyGems());
+  if (!state.gems || typeof state.gems !== 'object' || Object.keys(state.gems).length !== gemKeys.length || gemKeys.some(k => !validNumber(state.gems[k]))) return null;
+  for (const item of [...state.bag,...Object.values(state.equipped)].filter(Boolean)) {
+    if (!Array.isArray(item.sockets) || item.sockets.length < 1 || item.sockets.length > 2 || item.sockets.some(gem =>
+      gem !== null && (!gem || !Number.isInteger(gem.tier) || gem.tier < 1 || gem.tier > 5 || !GEM_TYPES.some(g => g.id === gem.type && g.slots.includes(item.slot))))) return null;
   }
   if (!validNumber(state.dungeonDay) || !state.dungeonAttempts || !state.dungeonClears || DUNGEONS.some(d =>
     !validNumber(state.dungeonAttempts[d.id]) || state.dungeonAttempts[d.id] > 3 ||
@@ -470,6 +497,7 @@ export function salvage(state, ids) {
   if (!Array.isArray(ids) || !ids.length || new Set(ids).size !== ids.length) throw new Error('请选择不同的背包装备');
   const items = ids.map(id => state.bag.find(item => item.id === id));
   if (items.some(item => !item || item.locked)) throw new Error('已穿戴或锁定的装备不能分解');
+  if (items.some(item => item.sockets?.some(Boolean))) throw new Error('请先卸下装备中的宝石');
   const ore = items.reduce((sum, item) => sum + 5 * (RARITIES.findIndex(r => r.id === item.rarity) + 1) + item.level * 3, 0);
   state.bag = state.bag.filter(item => !ids.includes(item.id));
   state.ore += ore;
@@ -586,7 +614,11 @@ function enterDungeon(state, id, difficulty, sweep, now) {
 }
 function dungeonRewards(state, info, won) {
   const rewards = {gold:0,ore:0,shards:0,dust:0,items:[]};
-  if (won) { rewards[info.id] = info.reward; state[info.id] += info.reward; }
+  if (won && info.id === 'gems') {
+    const type = GEM_TYPES[pick(state,GEM_TYPES.length)].id;
+    state.gems[`${type}:1`] += info.reward;
+    rewards.gems = [{type,tier:1,count:info.reward}];
+  } else if (won) { rewards[info.id] = info.reward; state[info.id] += info.reward; }
   return rewards;
 }
 export function startDungeon(state, id, difficulty = 0, now = Date.now()) {
@@ -596,7 +628,7 @@ export function startDungeon(state, id, difficulty = 0, now = Date.now()) {
   if (combat.won) { state.dungeonClears[id] = Math.max(state.dungeonClears[id],difficulty); state.daily.wins++; }
   const result = {...combat,rewards,kind:'dungeon',dungeonId:id,difficulty};
   state.encounter = {result,cursor:0};
-  state.history.unshift(`${info.name}·${DIFFICULTIES[difficulty]} ${combat.won ? '通关' : '失败'}，${info.resource} +${rewards[id]}`);
+  state.history.unshift(`${info.name}·${DIFFICULTIES[difficulty]} ${combat.won ? '通关' : '失败'}，${info.resource} +${combat.won ? info.reward : 0}`);
   state.history=state.history.slice(0,20);
   return state.encounter;
 }
@@ -606,4 +638,49 @@ export function sweepDungeon(state, id, difficulty = 0, now = Date.now()) {
   state.history.unshift(`扫荡 ${info.name}·${DIFFICULTIES[difficulty]}，${info.resource} +${info.reward}`);
   state.history=state.history.slice(0,20);
   return rewards;
+}
+
+export function gemTotal(state) { return Object.values(state.gems).reduce((sum,count) => sum + count,0); }
+function gemDefinition(type,tier) {
+  const definition = GEM_TYPES.find(g => g.id === type);
+  if (!definition || !Number.isInteger(tier) || tier < 1 || tier > 5) throw new Error('宝石类型或等级无效');
+  return definition;
+}
+function gemGuard(state) { guardForge(state); if (state.encounter) throw new Error('请先完成当前战斗'); }
+export function mergeGems(state,type,tier) {
+  gemGuard(state); gemDefinition(type,tier);
+  if (tier === 5) throw new Error('宝石已达最高等级');
+  const key = `${type}:${tier}`, gold = tier * 30;
+  if (state.gems[key] < 5) throw new Error('需要五颗同类同级的未镶嵌宝石');
+  if (state.gold < gold) throw new Error(`金币不足，需要 ${gold}`);
+  state.gems[key] -= 5; state.gems[`${type}:${tier+1}`]++; state.gold -= gold;
+  return {type,tier:tier+1};
+}
+function socketItem(state,id) {
+  gemGuard(state);
+  const item = findItem(state,id);
+  if (!item) throw new Error('装备不存在');
+  if (item.locked) throw new Error('请先解锁装备');
+  return item;
+}
+export function drillSocket(state,id) {
+  const item = socketItem(state,id);
+  if (item.sockets.length >= 2) throw new Error('该装备已达到两个孔位上限');
+  if (state.gold < 200 || state.ore < 60) throw new Error('打孔需要 200 金币和 60 铁矿');
+  state.gold -= 200; state.ore -= 60; item.sockets.push(null);
+}
+export function mountGem(state,id,index,type,tier) {
+  const item = socketItem(state,id), definition = gemDefinition(type,tier);
+  if (!Number.isInteger(index) || index < 0 || index >= item.sockets.length) throw new Error('孔位尚未开启');
+  if (item.sockets[index]) throw new Error('请先卸下原宝石');
+  if (!definition.slots.includes(item.slot)) throw new Error('该宝石不适用于此装备部位');
+  const key = `${type}:${tier}`;
+  if (state.gems[key] < 1) throw new Error('没有可用的同类同级宝石');
+  state.gems[key]--; item.sockets[index] = {type,tier};
+}
+export function unmountGem(state,id,index) {
+  const item = socketItem(state,id);
+  if (!Number.isInteger(index) || index < 0 || index >= item.sockets.length || !item.sockets[index]) throw new Error('该孔位没有宝石');
+  const gem = item.sockets[index]; state.gems[`${gem.type}:${gem.tier}`]++; item.sockets[index] = null;
+  return gem;
 }

@@ -4,11 +4,12 @@ import {newGame,makeItem,SLOTS,DUNGEONS,startDungeon,sweepDungeon,dungeonInfo,ad
 const T=Date.UTC(2026,10,27,3);
 function ready(){const s=newGame(812,T); s.bestStage=10;s.stageUnlocked=10; for(const slot of SLOTS){s.equipped[slot]=makeItem(s,'legendary',slot);s.equipped[slot].level=10;} return s;}
 function finish(s){while(advanceEncounter(s)){} closeEncounter(s);}
-test('四类副本只发指定资源，不改主线进度或掉落装备',()=>{
+test('五类副本只发指定资源，不改主线进度或掉落装备',()=>{
   for(const d of DUNGEONS){
     const s=ready(), before=structuredClone(s);startDungeon(s,d.id,0,T);
     assert.equal(s.encounter.result.won,true);
     for(const k of ['gold','ore','shards','dust'])assert.equal(s[k],before[k]+(k===d.id?d.rewards[0]:0));
+    if(d.id==='gems') assert.equal(Object.values(s.gems).reduce((a,b)=>a+b,0),d.rewards[0]);
     assert.equal(s.energy,28);assert.equal(s.dungeonAttempts[d.id],1);assert.equal(s.dungeonClears[d.id],0);
     assert.equal(s.stageUnlocked,before.stageUnlocked);assert.equal(s.bestStage,before.bestStage);assert.deepEqual(s.bag,before.bag);
     const r=restoreGame(JSON.parse(JSON.stringify(s)),T);assert.ok(r);assert.equal(r.encounter.result.dungeonId,d.id);
@@ -52,7 +53,7 @@ test('特殊攻击和恢复来自各副本机制',()=>{
 });
 test('V3迁移保留装备货币，损坏次数与难度拒绝加载',()=>{
   const s=ready();s.version=3;delete s.dungeonDay;delete s.dungeonClears;delete s.dungeonAttempts;
-  const r=restoreGame(s,T);assert.ok(r);assert.equal(r.version,4);assert.deepEqual(r.equipped,s.equipped);assert.equal(r.gold,s.gold);
+  const r=restoreGame(s,T);assert.ok(r);assert.equal(r.version,5);assert.deepEqual(r.equipped,s.equipped);assert.equal(r.gold,s.gold);
   r.dungeonAttempts.gold=4;assert.equal(restoreGame(r,T),null);
   r.dungeonAttempts.gold=0;r.dungeonClears.ore=3;assert.equal(restoreGame(r,T),null);
 });

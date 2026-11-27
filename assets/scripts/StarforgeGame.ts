@@ -8,6 +8,7 @@ import {
   syncTime, idleReward, claimIdle, TALENTS, talentCost, upgradeTalent, DAILY_TASKS, claimDaily, salvage,
   findItem, baseRange, forgeQuote, rollForge, resolveForge, compareItem, transferQuote, transferEnhancement,
   DUNGEONS, DIFFICULTIES, dungeonInfo, startDungeon, sweepDungeon,
+  GEM_TYPES, gemTotal, mergeGems, drillSocket, mountGem, unmountGem,
 } from './core/game-core';
 
 const { ccclass } = _decorator;
@@ -38,6 +39,11 @@ export class StarforgeGame extends Component {
   private dungeonOpen = false;
   private dungeonId = 'gold';
   private dungeonDifficulty = 0;
+  private gemsOpen = false;
+  private gemType = 'ruby';
+  private gemTier = 1;
+  private gemItemId: string | null = null;
+  private gemSocket = 0;
 
   update(dt: number) {
     const fight = this.game?.encounter;
@@ -57,7 +63,7 @@ export class StarforgeGame extends Component {
       if (!view.done) return;
       closeEncounter(this.game); this.save();
     }
-    this.tab = tab; this.bagPage = 0; this.forgeOpen = false; this.dungeonOpen = false;
+    this.tab = tab; this.bagPage = 0; this.forgeOpen = false; this.dungeonOpen = false; this.gemsOpen = false;
     syncTime(this.game); this.render();
   }
 
@@ -210,7 +216,7 @@ export class StarforgeGame extends Component {
     this.text(this.node, notice, 0, -83, 380, 30, 14, fight?.done ? C.gold : C.ink);
     if (fight) {
       this.text(this.node, running ? `强力突刺：${3 - fight.attacks % 3} 次攻击后释放 · 自动战斗中` :
-        `金币 +${fight.result.rewards.gold} · 铁矿 +${fight.result.rewards.ore} · 装备 +${fight.result.rewards.items.length}\n重铸石 +${fight.result.rewards.shards || 0} · 洗练尘 +${fight.result.rewards.dust || 0}`,
+        (fight.result.rewards.gems?.length ? fight.result.rewards.gems.map((g: any) => `${GEM_TYPES.find(t=>t.id===g.type)?.name} Lv.${g.tier} ×${g.count}`).join('、') : `金币 +${fight.result.rewards.gold} · 铁矿 +${fight.result.rewards.ore} · 装备 +${fight.result.rewards.items.length}\n重铸石 +${fight.result.rewards.shards || 0} · 洗练尘 +${fight.result.rewards.dust || 0}`),
         0, -135, 390, 42, 14, C.muted);
       if (running) {
         this.button(`战斗速度 ×${this.combatSpeed}`, 0, -198, 250, 50, () => { this.combatSpeed = this.combatSpeed === 1 ? 2 : 1; this.render(); });
@@ -246,14 +252,14 @@ export class StarforgeGame extends Component {
   private renderDungeon() {
     const info = dungeonInfo(this.game,this.dungeonId,this.dungeonDifficulty);
     this.text(this.node, '材料副本', 0, 292, 380, 40, 22, C.gold);
-    DUNGEONS.forEach((d,i) => this.button(d.resource,-145+i*96,238,88,40,()=>{
+    DUNGEONS.forEach((d,i) => this.button(d.resource,-152+i*76,238,70,40,()=>{
       this.dungeonId=d.id; this.dungeonDifficulty=0; this.status=d.mechanic; this.render();
     },d.id===this.dungeonId));
     DIFFICULTIES.forEach((name,i) => this.button(name,-126+i*126,183,116,40,()=>{
       this.dungeonDifficulty=i; this.render();
     },i===this.dungeonDifficulty));
     this.text(this.node, `${info.name} · ${DIFFICULTIES[this.dungeonDifficulty]}\n${info.mechanic}`, 0, 122, 390, 65, 16, C.ink);
-    this.text(this.node, `拥有：${this.game[info.id]} ${info.resource}\n主线第 ${info.requiredStage} 关通关后开放${info.previousCleared ? '' : '，还需通关上一难度'}`, 0, 53, 390, 55, 14, C.muted);
+    this.text(this.node, `拥有：${info.id === 'gems' ? gemTotal(this.game) : this.game[info.id]} ${info.resource}\n主线第 ${info.requiredStage} 关通关后开放${info.previousCleared ? '' : '，还需通关上一难度'}`, 0, 53, 390, 55, 14, C.muted);
     this.text(this.node, `胜利奖励：${info.resource} ×${info.reward}`, 0, -5, 390, 38, 22, C.gold);
     this.text(this.node, `今日剩余 ${info.remaining}/3 次 · 每次消耗 2 体力`, 0, -49, 390, 35, 15);
     this.button('开始挑战', 0, -105, 300, 48, () => this.action(()=>{
@@ -261,7 +267,7 @@ export class StarforgeGame extends Component {
     }),true);
     this.button(info.canSweep ? '扫荡一次' : '首次通关后解锁扫荡', 0, -164, 300, 44, () => this.action(()=>{
       const r=sweepDungeon(this.game,this.dungeonId,this.dungeonDifficulty);
-      this.status=`扫荡完成：${info.resource} +${r[info.id]}`;
+      this.status=info.id === 'gems' ? `扫荡获得 ${GEM_TYPES.find(t=>t.id===r.gems[0].type)?.name} ×${r.gems[0].count}` : `扫荡完成：${info.resource} +${r[info.id]}`;
     }));
     this.text(this.node, '各类副本独立计次，同类所有难度共享次数。\n失败也消耗次数。每天 00:00 刷新。', 0, -225, 390, 58, 13, C.muted);
     this.button('返回主线', 0, -282, 220, 38, () => {this.dungeonOpen=false;this.render();});
@@ -276,8 +282,13 @@ export class StarforgeGame extends Component {
   }
 
   private renderEquipment() {
+    if (this.gemsOpen) { this.renderGems(); return; }
     if (this.forgeOpen && findItem(this.game, this.selectedItem)) { this.renderForge(); return; }
-    this.text(this.node, `装备栏 · 战力 ${heroStats(this.game).power}`, 0, 293, 380, 30, 19, C.gold);
+    this.text(this.node, `装备栏 · 战力 ${heroStats(this.game).power}`, -60, 293, 260, 30, 19, C.gold);
+    this.button('宝石', 145, 293, 100, 38, () => {
+      this.gemItemId = this.selectedItem || this.game.equipped.weapon?.id || null;
+      this.gemSocket = 0; this.gemsOpen = true; this.render();
+    });
     SLOTS.forEach((slot: string, index: number) => {
       const item = this.game.equipped[slot];
       const x = -130 + (index % 3) * 130;
@@ -329,6 +340,38 @@ export class StarforgeGame extends Component {
       }
     }
     this.text(this.node, this.status, 0, -303, 385, 40, 13, C.muted);
+  }
+
+  private renderGems() {
+    const type = GEM_TYPES.find(g=>g.id===this.gemType)!;
+    const item = findItem(this.game,this.gemItemId);
+    this.text(this.node, '宝石工坊', 0, 294, 390, 40, 23, C.gold);
+    GEM_TYPES.forEach((g,i)=>this.button(g.name,-126+i*126,243,116,40,()=>{this.gemType=g.id;this.render();},g.id===this.gemType));
+    for (let tier=1;tier<=5;tier++) this.button(`Lv.${tier}\n×${this.game.gems[`${this.gemType}:${tier}`]}`,-152+(tier-1)*76,190,70,48,()=>{this.gemTier=tier;this.render();},tier===this.gemTier);
+    this.text(this.node, `${type.name} Lv.${this.gemTier}：${type.label} +${type.base*2**(this.gemTier-1)}\n可镶嵌：${type.slots.map(s=>SLOT_NAMES[s]).join('、')}`,0,137,390,48,14,C.cyan);
+    this.button(this.gemTier===5 ? '已达最高等级' : `五合一升级 · ${this.gemTier*30} 金币`,0,85,330,40,()=>this.action(()=>{
+      const gem=mergeGems(this.game,this.gemType,this.gemTier);this.gemTier=gem.tier;this.status=`获得 ${type.name} Lv.${gem.tier}`;
+    }),true);
+    this.text(this.node, item ? `当前装备：${item.name} +${item.level}` : '选择已穿戴装备；也可在背包选中装备后进入此页',0,40,390,32,14);
+    SLOTS.forEach((slot,i)=>this.button(SLOT_NAMES[slot],-126+(i%3)*126,-2-Math.floor(i/3)*44,116,36,()=>{
+      this.gemItemId=this.game.equipped[slot]?.id || null;this.gemSocket=0;this.render();
+    },item?.slot===slot));
+    for(let i=0;i<2;i++) {
+      const gem=item?.sockets[i];
+      const label=!item ? '未选择装备' : i>=item.sockets.length ? `孔 ${i+1} · 未开启` : gem ? `${GEM_TYPES.find(g=>g.id===gem.type)?.name} Lv.${gem.tier}` : `孔 ${i+1} · 空`;
+      this.button(label,-98+i*196,-104,184,42,()=>{this.gemSocket=i;this.render();},i===this.gemSocket);
+    }
+    this.button('镶嵌所选宝石',-98,-158,184,42,()=>this.action(()=>{
+      mountGem(this.game,this.gemItemId,this.gemSocket,this.gemType,this.gemTier);this.status='镶嵌成功，穿戴后属性生效';
+    }),true);
+    this.button('免费卸下宝石',98,-158,184,42,()=>this.action(()=>{
+      unmountGem(this.game,this.gemItemId,this.gemSocket);this.status='宝石已完整放回库存';
+    }));
+    this.button('开启第二孔 · 200 金币 + 60 铁矿',0,-211,380,42,()=>this.action(()=>{
+      drillSocket(this.game,this.gemItemId);this.gemSocket=1;this.status='第二孔已开启';
+    }));
+    this.button('返回装备',0,-264,220,38,()=>{this.gemsOpen=false;this.render();});
+    this.text(this.node,this.status,0,-308,390,40,12,C.muted);
   }
 
   private renderForge() {
