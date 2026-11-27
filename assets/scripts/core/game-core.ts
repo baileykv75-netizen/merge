@@ -1,7 +1,14 @@
 // @ts-nocheck
 /** 装备合成原型的跨平台规则。只使用标准 JavaScript，网页和 Cocos 共用。 */
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
+export const DUNGEONS = [
+  {id:'gold', name:'盗匪营地', resource:'金币', unlock:2, rewards:[180,450,900], mechanic:'盗匪每三次攻击发动伏击，伤害翻倍'},
+  {id:'ore', name:'铁甲矿坑', resource:'铁矿', unlock:2, rewards:[25,60,120], mechanic:'矿坑守卫生命提高，护甲抵消 18% 伤害'},
+  {id:'shards', name:'熔火遗迹', resource:'重铸石', unlock:3, rewards:[5,10,18], mechanic:'敌人造成元素伤害，每三次攻击发动灼烧'},
+  {id:'dust', name:'幽雾林地', resource:'洗练尘', unlock:5, rewards:[5,10,18], mechanic:'敌人每三次攻击恢复 10% 生命'},
+];
+export const DIFFICULTIES = ['普通','困难','噩梦'];
 export const ENERGY_CAP = 30;
 export const ENERGY_INTERVAL = 5 * 60 * 1000;
 export const OFFLINE_CAP = 8 * 60 * 60 * 1000;
@@ -95,6 +102,9 @@ export function newGame(seed = Date.now(), now = Date.now()) {
     idleOreRemainder: 0,
     talents: { attack: 0, health: 0, defense: 0 },
     daily: { day: dayKey(now), wins: 0, merges: 0, upgrades: 0, claimed: [] },
+    dungeonDay: dayKey(now),
+    dungeonAttempts: Object.fromEntries(DUNGEONS.map(d => [d.id, 0])),
+    dungeonClears: Object.fromEntries(DUNGEONS.map(d => [d.id, -1])),
   };
   state.equipped.weapon = makeItem(state, "common", "weapon");
   state.equipped.armor = makeItem(state, "common", "armor");
@@ -212,34 +222,8 @@ export function battle(state, stage, now = Date.now()) {
   syncTime(state, now);
   if (state.energy < 1) throw new Error("体力不足");
   state.energy -= 1;
-  const hero = heroStats(state);
-  let heroHp = hero.health;
-  const events = [];
-  const waveCount = stage < 4 ? 2 : stage < 8 ? 3 : 4;
-  let won = true;
-  for (let wave = 1; wave <= waveCount; wave++) {
-    let enemyHp = 33 + stage * 13 + wave * 10;
-    const enemyDamage = 3 + stage * 2 + wave;
-    events.push({ type: "wave", wave, maxHp: enemyHp });
-    let turn = 0;
-    while (enemyHp > 0 && heroHp > 0 && turn < 100) {
-      turn += 1;
-      const skill = turn % 3 === 0;
-      const critical = random(state) < hero.crit;
-      const damage = Math.max(1, Math.round(hero.attack * (skill ? 1.7 : 1) * (critical ? 1.5 : 1) * (0.9 + random(state) * 0.2)));
-      enemyHp = Math.max(0, enemyHp - damage);
-      events.push({ type: "hero", wave, damage, skill, critical, enemyHp });
-      if (enemyHp <= 0) break;
-      const taken = Math.max(1, Math.round((enemyDamage * (0.9 + random(state) * 0.2) - hero.defense * 0.22) * (wave % 2 === 0 ? 1 - hero.resist : 1)));
-      heroHp = Math.max(0, heroHp - taken);
-      events.push({ type: "enemy", wave, damage: taken, heroHp });
-      if (heroHp > 0 && hero.regen) {
-        heroHp = Math.min(hero.health, heroHp + hero.regen);
-        events.push({ type: 'heal', wave, heroHp, amount: hero.regen });
-      }
-    }
-    if (heroHp <= 0 || turn >= 100) { won = false; break; }
-  }
+  const combat = simulateCombat(state, stage);
+  const { won } = combat;
   const rewards = { gold: won ? 35 + stage * 18 : 10 + stage * 3, ore: won ? 3 + stage : 0, items: [] };
   rewards.shards = won && stage >= 3 ? 1 + Math.floor(stage / 5) : 0;
   rewards.dust = won && stage >= 5 ? 1 + Math.floor(stage / 7) : 0;
@@ -267,12 +251,52 @@ export function battle(state, stage, now = Date.now()) {
   }
   state.history.unshift(`${won ? "通关" : "挑战失败"} 第 ${stage} 关，获得 ${rewards.gold} 金币`);
   state.history = state.history.slice(0, 20);
-  return { won, stage, waveCount, heroHp, maxHeroHp: hero.health, events, rewards };
+  return { ...combat, rewards };
+}
+
+function simulateCombat(state, stage, profile = null) {
+  const hero = heroStats(state);
+  let heroHp = hero.health;
+  const events = [];
+  const waveCount = stage < 4 ? 2 : stage < 8 ? 3 : 4;
+  let won = true;
+  for (let wave = 1; wave <= waveCount; wave++) {
+    let enemyHp = Math.round((33 + stage * 13 + wave * 10) * (profile === 'ore' ? 1.15 : 1));
+    const enemyMaxHp = enemyHp;
+    const enemyDamage = 3 + stage * 2 + wave;
+    events.push({ type: "wave", wave, maxHp: enemyHp });
+    let turn = 0;
+    while (enemyHp > 0 && heroHp > 0 && turn < 100) {
+      turn += 1;
+      const skill = turn % 3 === 0;
+      const critical = random(state) < hero.crit;
+      const damage = Math.max(1, Math.round(hero.attack * (skill ? 1.7 : 1) * (critical ? 1.5 : 1) * (profile === 'ore' ? 0.82 : 1) * (0.9 + random(state) * 0.2)));
+      enemyHp = Math.max(0, enemyHp - damage);
+      events.push({ type: "hero", wave, damage, skill, critical, enemyHp });
+      if (enemyHp <= 0) break;
+      const ability = turn % 3 === 0 && profile === 'gold' ? '伏击' : turn % 3 === 0 && profile === 'shards' ? '灼烧' : '';
+      const multiplier = ability === '伏击' ? 2 : ability === '灼烧' ? 1.5 : 1;
+      const taken = Math.max(1, Math.round((enemyDamage * multiplier * (0.9 + random(state) * 0.2) - hero.defense * 0.22) * (profile === 'shards' || wave % 2 === 0 ? 1 - hero.resist : 1)));
+      heroHp = Math.max(0, heroHp - taken);
+      events.push({ type: "enemy", wave, damage: taken, heroHp, ability });
+      if (heroHp > 0 && profile === 'dust' && turn % 3 === 0) {
+        const amount = Math.min(enemyMaxHp - enemyHp, Math.ceil(enemyMaxHp * 0.1));
+        enemyHp += amount;
+        events.push({type:'enemyHeal', wave, amount, enemyHp});
+      }
+      if (heroHp > 0 && hero.regen) {
+        heroHp = Math.min(hero.health, heroHp + hero.regen);
+        events.push({ type: 'heal', wave, heroHp, amount: hero.regen });
+      }
+    }
+    if (heroHp <= 0 || turn >= 100) { won = false; break; }
+  }
+  return { won, stage, waveCount, heroHp, maxHeroHp: hero.health, events };
 }
 
 /** @param {unknown} value */
 export function restoreGame(value, now = Date.now()) {
-  if (!value || typeof value !== "object" || ![1, 2, SAVE_VERSION].includes(value.version)) return null;
+  if (!value || typeof value !== "object" || ![1, 2, 3, SAVE_VERSION].includes(value.version)) return null;
   if (!Array.isArray(value.bag) || !value.equipped || !Number.isInteger(value.seed)) return null;
   if (!Number.isInteger(value.stageUnlocked) || value.stageUnlocked < 1 || value.stageUnlocked > 10) return null;
   const validNumber = n => Number.isSafeInteger(n) && n >= 0;
@@ -300,6 +324,15 @@ export function restoreGame(value, now = Date.now()) {
       daily: { day: dayKey(now), wins: 0, merges: 0, upgrades: 0, claimed: [] } });
   }
   if (oldVersion < 3) { state.shards = 0; state.dust = 0; state.version = SAVE_VERSION; }
+  if (oldVersion < 4) {
+    state.dungeonDay = dayKey(Math.max(state.clock, now));
+    state.dungeonAttempts = Object.fromEntries(DUNGEONS.map(d => [d.id, 0]));
+    state.dungeonClears = Object.fromEntries(DUNGEONS.map(d => [d.id, -1]));
+    state.version = SAVE_VERSION;
+  }
+  if (!validNumber(state.dungeonDay) || !state.dungeonAttempts || !state.dungeonClears || DUNGEONS.some(d =>
+    !validNumber(state.dungeonAttempts[d.id]) || state.dungeonAttempts[d.id] > 3 ||
+    !Number.isInteger(state.dungeonClears[d.id]) || state.dungeonClears[d.id] < -1 || state.dungeonClears[d.id] > 2)) return null;
   if (!validNumber(state.shards) || !validNumber(state.dust)) return null;
   if (!['clock', 'energyAt', 'idleAt'].every(k => validNumber(state[k]))) return null;
   if (!validNumber(state.idleOreRemainder) || state.idleOreRemainder >= 5) return null;
@@ -325,6 +358,7 @@ export function restoreGame(value, now = Date.now()) {
 function validEncounter(encounter) {
   const r = encounter?.result;
   const nonnegative = x => Number.isSafeInteger(x) && x >= 0;
+  if (r?.kind != null && (r.kind !== 'dungeon' || !DUNGEONS.some(d => d.id === r.dungeonId) || !Number.isInteger(r.difficulty) || r.difficulty < 0 || r.difficulty > 2)) return false;
   if (!r || typeof r.won !== 'boolean' || !Number.isInteger(r.stage) || r.stage < 1 || r.stage > 10
     || !Number.isInteger(r.waveCount) || r.waveCount < 2 || r.waveCount > 4
     || !nonnegative(r.heroHp) || !nonnegative(r.maxHeroHp) || r.maxHeroHp < 1 || r.heroHp > r.maxHeroHp
@@ -335,7 +369,8 @@ function validEncounter(encounter) {
     e.type === 'wave' ? nonnegative(e.maxHp) && e.maxHp > 0 :
     e.type === 'hero' ? nonnegative(e.damage) && nonnegative(e.enemyHp) :
     e.type === 'enemy' ? nonnegative(e.damage) && nonnegative(e.heroHp) && e.heroHp <= r.maxHeroHp :
-    e.type === 'heal' ? nonnegative(e.amount) && nonnegative(e.heroHp) && e.heroHp <= r.maxHeroHp : false));
+    e.type === 'heal' ? nonnegative(e.amount) && nonnegative(e.heroHp) && e.heroHp <= r.maxHeroHp :
+    e.type === 'enemyHeal' ? nonnegative(e.amount) && nonnegative(e.enemyHp) : false));
 }
 
 // 开始时仅结算一次；后续播放、加速、恢复和确认结果均不再发奖。
@@ -364,6 +399,7 @@ export function encounterView(state) {
     view.last = e; view.wave = e.wave;
     if (e.type === 'wave') { view.enemyHp = e.maxHp; view.enemyMaxHp = e.maxHp; view.attacks = 0; }
     if (e.type === 'hero') { view.enemyHp = e.enemyHp; view.attacks++; }
+    if (e.type === 'enemyHeal') view.enemyHp = e.enemyHp;
     if (e.type === 'enemy' || e.type === 'heal') view.heroHp = e.heroHp;
   }
   return view;
@@ -375,6 +411,10 @@ export function syncTime(state, now = Date.now()) {
   if (!Number.isSafeInteger(now) || now < 0) throw new Error('时间无效');
   const current = Math.max(state.clock, now);
   state.clock = current;
+  if (dayKey(current) > state.dungeonDay) {
+    state.dungeonDay = dayKey(current);
+    state.dungeonAttempts = Object.fromEntries(DUNGEONS.map(d => [d.id,0]));
+  }
   if (state.energy >= ENERGY_CAP) state.energyAt = current;
   else {
     const ticks = Math.max(0, Math.floor((current - state.energyAt) / ENERGY_INTERVAL));
@@ -516,4 +556,54 @@ export function transferEnhancement(state, targetId) {
   state.gold -= gold;
   [source.level,target.level] = [target.level,source.level];
   return target;
+}
+
+export function dungeonInfo(state, id, difficulty = 0, now = Date.now()) {
+  const definition = DUNGEONS.find(d => d.id === id);
+  if (!definition || !Number.isInteger(difficulty) || difficulty < 0 || difficulty > 2) throw new Error('副本或难度无效');
+  const requiredStage = Math.max(definition.unlock, [2,5,8][difficulty]);
+  const day = dayKey(Math.max(state.clock,now));
+  const used = day > state.dungeonDay ? 0 : state.dungeonAttempts[id];
+  const unlocked = state.bestStage >= requiredStage;
+  const previousCleared = difficulty === 0 || state.dungeonClears[id] >= difficulty-1;
+  return { ...definition, difficulty, requiredStage, unlocked, previousCleared,
+    remaining: Math.max(0,3-used), canSweep: state.dungeonClears[id] >= difficulty,
+    reward: definition.rewards[difficulty], energy: 2, stage: 2 + difficulty * 3 };
+}
+function enterDungeon(state, id, difficulty, sweep, now) {
+  guardForge(state);
+  if (state.encounter) throw new Error('请先完成当前战斗');
+  const info = dungeonInfo(state,id,difficulty,now);
+  if (!info.unlocked) throw new Error(`通关主线第 ${info.requiredStage} 关后解锁`);
+  if (!info.previousCleared) throw new Error('请先通关上一难度');
+  if (sweep && !info.canSweep) throw new Error('首次通关本难度后才可扫荡');
+  if (!info.remaining) throw new Error('今日该副本次数已用完，明日 00:00 刷新');
+  syncTime(state,now);
+  if (state.energy < info.energy) throw new Error('体力不足，需要 2 点');
+  state.energy -= info.energy;
+  state.dungeonAttempts[id]++;
+  return info;
+}
+function dungeonRewards(state, info, won) {
+  const rewards = {gold:0,ore:0,shards:0,dust:0,items:[]};
+  if (won) { rewards[info.id] = info.reward; state[info.id] += info.reward; }
+  return rewards;
+}
+export function startDungeon(state, id, difficulty = 0, now = Date.now()) {
+  const info = enterDungeon(state,id,difficulty,false,now);
+  const combat = simulateCombat(state,info.stage,id);
+  const rewards = dungeonRewards(state,info,combat.won);
+  if (combat.won) { state.dungeonClears[id] = Math.max(state.dungeonClears[id],difficulty); state.daily.wins++; }
+  const result = {...combat,rewards,kind:'dungeon',dungeonId:id,difficulty};
+  state.encounter = {result,cursor:0};
+  state.history.unshift(`${info.name}·${DIFFICULTIES[difficulty]} ${combat.won ? '通关' : '失败'}，${info.resource} +${rewards[id]}`);
+  state.history=state.history.slice(0,20);
+  return state.encounter;
+}
+export function sweepDungeon(state, id, difficulty = 0, now = Date.now()) {
+  const info = enterDungeon(state,id,difficulty,true,now);
+  const rewards = dungeonRewards(state,info,true);
+  state.history.unshift(`扫荡 ${info.name}·${DIFFICULTIES[difficulty]}，${info.resource} +${info.reward}`);
+  state.history=state.history.slice(0,20);
+  return rewards;
 }

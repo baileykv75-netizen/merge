@@ -7,6 +7,7 @@ import {
   itemStats, equip, toggleLock, synthesize, enhance, startEncounter, advanceEncounter, closeEncounter, encounterView,
   syncTime, idleReward, claimIdle, TALENTS, talentCost, upgradeTalent, DAILY_TASKS, claimDaily, salvage,
   findItem, baseRange, forgeQuote, rollForge, resolveForge, compareItem, transferQuote, transferEnhancement,
+  DUNGEONS, DIFFICULTIES, dungeonInfo, startDungeon, sweepDungeon,
 } from './core/game-core';
 
 const { ccclass } = _decorator;
@@ -34,6 +35,9 @@ export class StarforgeGame extends Component {
   private combatClock = 0;
   private combatSpeed = 1;
   private forgeOpen = false;
+  private dungeonOpen = false;
+  private dungeonId = 'gold';
+  private dungeonDifficulty = 0;
 
   update(dt: number) {
     const fight = this.game?.encounter;
@@ -53,7 +57,7 @@ export class StarforgeGame extends Component {
       if (!view.done) return;
       closeEncounter(this.game); this.save();
     }
-    this.tab = tab; this.bagPage = 0; this.forgeOpen = false;
+    this.tab = tab; this.bagPage = 0; this.forgeOpen = false; this.dungeonOpen = false;
     syncTime(this.game); this.render();
   }
 
@@ -62,6 +66,11 @@ export class StarforgeGame extends Component {
       this.game = restoreGame(JSON.parse(sys.localStorage.getItem(SAVE_KEY) || 'null')) || newGame();
     } catch { this.game = newGame(); }
     this.stage = this.game.encounter?.result.stage || this.game.stageUnlocked;
+    if (this.game.encounter?.result.kind === 'dungeon') {
+      this.dungeonId = this.game.encounter.result.dungeonId;
+      this.dungeonDifficulty = this.game.encounter.result.difficulty;
+      this.stage = this.game.stageUnlocked;
+    }
     if (this.game.pendingForge) { this.tab = 'equipment'; this.forgeOpen = true; this.selectedItem = this.game.pendingForge.itemId; }
     syncTime(this.game);
     this.save();
@@ -170,14 +179,16 @@ export class StarforgeGame extends Component {
   }
 
   private renderAdventure() {
+    if (this.dungeonOpen && !this.game.encounter) { this.renderDungeon(); return; }
     const h = heroStats(this.game);
     const fight = encounterView(this.game);
+    const dungeon = fight?.result.kind === 'dungeon' ? DUNGEONS.find(d => d.id === fight.result.dungeonId) : null;
     const running = fight && !fight.done;
     this.box(this.node, 'Battle', 0, 95, 396, 378, C.panel, C.line);
     this.picture('battle-observatory', 0, 95, 394, 375);
     const hero = this.picture('hero-sky-knight', -92, 52, 178, 250);
     const enemy = this.picture('void-beast', 100, 80, 164, 174);
-    this.text(this.node, `第 ${this.stage} 关 · ${fight ? `第 ${fight.wave}/${fight.result.waveCount} 波` : '试炼场'}`, 0, 249, 360, 35, 21, C.gold);
+    this.text(this.node, `${dungeon ? dungeon.name : `第 ${this.stage} 关`} · ${fight ? `第 ${fight.wave}/${fight.result.waveCount} 波` : '试炼场'}`, 0, 249, 360, 35, 21, C.gold);
     const event = fight?.last;
     if (running && event && ['hero', 'enemy'].includes(event.type)) {
       const actor = event.type === 'hero' ? hero : enemy;
@@ -189,12 +200,13 @@ export class StarforgeGame extends Component {
       this.text(this.node, `${event.critical ? '暴击 ' : ''}-${event.damage}`, event.type === 'hero' ? 100 : -92, 178, 180, 44, 26, event.critical ? C.gold : C.red);
     }
     if (running && event?.type === 'heal') this.text(this.node, `+${event.amount}`, -92, 178, 150, 40, 24, C.green);
+    if (running && event?.type === 'enemyHeal') this.text(this.node, `+${event.amount}`, 100, 178, 150, 40, 24, C.green);
     this.healthBar(-100, -48, fight?.heroHp ?? h.health, fight?.result.maxHeroHp ?? h.health, C.green);
     this.healthBar(100, -48, fight?.enemyHp ?? 1, fight?.enemyMaxHp ?? 1, C.red);
     const notice = !fight ? `战力 ${h.power} · 攻击 ${h.attack} · 生命 ${h.health}` : fight.done ?
       (fight.result.won ? '挑战成功！战利品已放入背包' : '挑战失败 · 强化装备后再来') :
       event?.type === 'hero' ? `${event.skill ? '强力突刺' : '普通攻击'}：${event.damage} 伤害` :
-      event?.type === 'enemy' ? `敌人反击：${event.damage} 伤害` : event?.type === 'heal' ? `装备恢复 ${event.amount} 生命` : '敌人出现，准备战斗';
+      event?.type === 'enemy' ? `敌人${event.ability || '反击'}：${event.damage} 伤害` : event?.type === 'heal' ? `装备恢复 ${event.amount} 生命` : event?.type === 'enemyHeal' ? `敌人恢复 ${event.amount} 生命` : '敌人出现，准备战斗';
     this.text(this.node, notice, 0, -83, 380, 30, 14, fight?.done ? C.gold : C.ink);
     if (fight) {
       this.text(this.node, running ? `强力突刺：${3 - fight.attacks % 3} 次攻击后释放 · 自动战斗中` :
@@ -203,14 +215,16 @@ export class StarforgeGame extends Component {
       if (running) {
         this.button(`战斗速度 ×${this.combatSpeed}`, 0, -198, 250, 50, () => { this.combatSpeed = this.combatSpeed === 1 ? 2 : 1; this.render(); });
       } else {
-        this.button(fight.result.won ? '继续冒险' : '再次挑战', -93, -198, 175, 50, () => this.action(() => {
+        this.button(dungeon ? '返回副本' : fight.result.won ? '继续冒险' : '再次挑战', -93, -198, 175, 50, () => this.action(() => {
           const won = fight.result.won; closeEncounter(this.game);
+          if (dungeon) { this.dungeonOpen = true; return; }
           if (won) this.stage = Math.min(10, this.stage + 1);
           else { startEncounter(this.game, this.stage); this.combatClock = 0; }
         }), true);
         this.button('查看装备', 102, -198, 175, 50, () => this.switchTab('equipment'));
       }
-      this.text(this.node, running ? '战斗中断后会保留进度，重新进入即可继续。' :
+      this.text(this.node, running ? (dungeon?.mechanic || '战斗中断后会保留进度，重新进入即可继续。') : dungeon ?
+        (fight.result.won ? '已解锁本难度扫荡。挑战和扫荡共享每日次数。' : '本次已消耗次数和体力，提升装备后再挑战。') :
         fight.result.rewards.items.map((item: any) => item.name).join('、') || '背包已满时，多余战利品自动转为铁矿。',
         0, -269, 380, 60, 14, C.muted);
       return;
@@ -225,7 +239,33 @@ export class StarforgeGame extends Component {
     this.button('开始挑战', 0, -194, 250, 55, () => this.action(() => {
       startEncounter(this.game, this.stage); this.combatClock = 0;
     }), true);
-    this.text(this.node, this.status, 0, -259, 380, 65, 15, C.muted);
+    this.button('材料副本', 0, -263, 250, 44, () => { this.dungeonOpen = true; this.render(); });
+    this.text(this.node, this.status, 0, -309, 380, 32, 12, C.muted);
+  }
+
+  private renderDungeon() {
+    const info = dungeonInfo(this.game,this.dungeonId,this.dungeonDifficulty);
+    this.text(this.node, '材料副本', 0, 292, 380, 40, 22, C.gold);
+    DUNGEONS.forEach((d,i) => this.button(d.resource,-145+i*96,238,88,40,()=>{
+      this.dungeonId=d.id; this.dungeonDifficulty=0; this.status=d.mechanic; this.render();
+    },d.id===this.dungeonId));
+    DIFFICULTIES.forEach((name,i) => this.button(name,-126+i*126,183,116,40,()=>{
+      this.dungeonDifficulty=i; this.render();
+    },i===this.dungeonDifficulty));
+    this.text(this.node, `${info.name} · ${DIFFICULTIES[this.dungeonDifficulty]}\n${info.mechanic}`, 0, 122, 390, 65, 16, C.ink);
+    this.text(this.node, `拥有：${this.game[info.id]} ${info.resource}\n主线第 ${info.requiredStage} 关通关后开放${info.previousCleared ? '' : '，还需通关上一难度'}`, 0, 53, 390, 55, 14, C.muted);
+    this.text(this.node, `胜利奖励：${info.resource} ×${info.reward}`, 0, -5, 390, 38, 22, C.gold);
+    this.text(this.node, `今日剩余 ${info.remaining}/3 次 · 每次消耗 2 体力`, 0, -49, 390, 35, 15);
+    this.button('开始挑战', 0, -105, 300, 48, () => this.action(()=>{
+      startDungeon(this.game,this.dungeonId,this.dungeonDifficulty); this.dungeonOpen=false; this.combatClock=0;
+    }),true);
+    this.button(info.canSweep ? '扫荡一次' : '首次通关后解锁扫荡', 0, -164, 300, 44, () => this.action(()=>{
+      const r=sweepDungeon(this.game,this.dungeonId,this.dungeonDifficulty);
+      this.status=`扫荡完成：${info.resource} +${r[info.id]}`;
+    }));
+    this.text(this.node, '各类副本独立计次，同类所有难度共享次数。\n失败也消耗次数。每天 00:00 刷新。', 0, -225, 390, 58, 13, C.muted);
+    this.button('返回主线', 0, -282, 220, 38, () => {this.dungeonOpen=false;this.render();});
+    this.text(this.node, this.status, 0, -316, 390, 27, 12, C.muted);
   }
 
   private healthBar(x: number, y: number, hp: number, max: number, color: Color) {
