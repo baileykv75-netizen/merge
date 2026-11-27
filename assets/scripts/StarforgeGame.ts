@@ -10,6 +10,7 @@ import {
   DUNGEONS, DIFFICULTIES, dungeonInfo, startDungeon, sweepDungeon,
   GEM_TYPES, gemTotal, mergeGems, drillSocket, mountGem, unmountGem,
   SKILLS, skillPoints, learnSkill, assignSkill, activateLoadout, resetSkills,
+  CHAPTERS, STAGES, MAX_STAGE, MILESTONES, stageInfo, claimMilestone,
 } from './core/game-core';
 
 const { ccclass } = _decorator;
@@ -48,6 +49,8 @@ export class StarforgeGame extends Component {
   private gemSocket = 0;
   private skillsOpen = false;
   private selectedSkill = 'slash';
+  private chapterOpen = false;
+  private chapterIndex = 0;
 
   update(dt: number) {
     const fight = this.game?.encounter;
@@ -68,6 +71,7 @@ export class StarforgeGame extends Component {
       closeEncounter(this.game); this.save();
     }
     this.tab = tab; this.bagPage = 0; this.forgeOpen = false; this.dungeonOpen = false; this.gemsOpen = false; this.skillsOpen = false;
+    this.chapterOpen = false;
     syncTime(this.game); this.render();
   }
 
@@ -196,11 +200,17 @@ export class StarforgeGame extends Component {
   }
 
   private renderAdventure() {
+    if (this.chapterOpen && !this.game.encounter) { this.renderChapters(); return; }
     if (this.dungeonOpen && !this.game.encounter) { this.renderDungeon(); return; }
+    const info = stageInfo(this.stage);
     const h = heroStats(this.game);
     const fight = encounterView(this.game);
     const dungeon = fight?.result.kind === 'dungeon' ? DUNGEONS.find(d => d.id === fight.result.dungeonId) : null;
     const running = fight && !fight.done;
+    if (!fight) {
+      this.text(this.node, info.chapterName, -55, 294,280,34,18,C.gold);
+      this.button('章节',155,294,92,32,()=>{this.chapterOpen=true;this.chapterIndex=info.chapter;this.status='选择关卡查看敌人与奖励；宝箱材料可用于五合一';this.render();});
+    }
     this.box(this.node, 'Battle', 0, 95, 396, 378, C.panel, C.line);
     this.picture('battle-observatory', 0, 95, 394, 375);
     const hero = this.picture('hero-sky-knight', -92, 52, 178, 250);
@@ -211,7 +221,8 @@ export class StarforgeGame extends Component {
       if (this.artErrors.size) this.button('重新加载画面', 0, 62, 210, 38, () => { this.loadArt(); this.render(); });
       else this.text(this.node, '首次进入需要下载画面，请稍候', 0, 64, 320, 36, 13, C.muted);
     }
-    this.text(this.node, `${dungeon ? dungeon.name : `第 ${this.stage} 关`} · ${fight ? `第 ${fight.wave}/${fight.result.waveCount} 波` : '试炼场'}`, 0, 249, 360, 35, 21, C.gold);
+    this.text(this.node, `${dungeon ? dungeon.name : `${this.stage} · ${info.name}`}${fight ? ` · ${fight.wave}/${fight.result.waveCount} 波` : ''}`, 0, 249, 390, 35, 19, C.gold);
+    this.text(this.node, fight ? `${fight.boss?'首领 · ':''}${fight.enemyName}` : info.foes.map((e:any)=>e.name).join(' → '),0,210,380,36,13,C.ink);
     const event = fight?.last;
     if (running && event && ['hero', 'enemy'].includes(event.type)) {
       const actor = event.type === 'hero' ? hero : enemy;
@@ -225,12 +236,12 @@ export class StarforgeGame extends Component {
     if (running && event?.type === 'heal') this.text(this.node, `+${event.amount}`, -92, 178, 150, 40, 24, C.green);
     if (running && event?.type === 'enemyHeal') this.text(this.node, `+${event.amount}`, 100, 178, 150, 40, 24, C.green);
     this.healthBar(-100, -48, fight?.heroHp ?? h.health, fight?.result.maxHeroHp ?? h.health, C.green);
-    this.healthBar(100, -48, fight?.enemyHp ?? 1, fight?.enemyMaxHp ?? 1, C.red);
+    this.healthBar(100, -48, fight?.enemyHp ?? info.foes[0].maxHp, fight?.enemyMaxHp ?? info.foes[0].maxHp, C.red);
     const notice = !fight ? `战力 ${h.power} · 攻击 ${h.attack} · 生命 ${h.health}` : fight.done ?
       (fight.result.won ? '挑战成功！战利品已放入背包' : '挑战失败 · 强化装备后再来') :
       event?.type === 'hero' ? `${SKILLS.find(s=>s.id===event.skill)?.name || (event.skill ? '强力突刺' : '普通攻击')}：${event.damage} 伤害` :
-      event?.type === 'enemy' ? `敌人${event.ability || '反击'}：${event.damage} 伤害` : event?.type === 'heal' ? `${event.skill ? '复苏' : '装备恢复'} +${event.amount} 生命` : event?.type === 'enemyHeal' ? `敌人恢复 ${event.amount} 生命` : event?.type === 'buff' ? `${SKILLS.find(s=>s.id===event.skill)?.name}发动` : '敌人出现，准备战斗';
-    this.text(this.node, notice, 0, -83, 380, 30, 14, fight?.done ? C.gold : C.ink);
+      event?.type === 'enemy' ? `敌人${event.ability || '反击'}：${event.damage} 伤害` : event?.type === 'heal' ? `${event.skill ? '复苏' : '装备恢复'} +${event.amount} 生命` : event?.type === 'enemyHeal' ? `敌人恢复 ${event.amount} 生命${event.suppressed?' · 中毒减疗':''}` : event?.type === 'enemyStatus' ? event.text : event?.type === 'buff' ? `${SKILLS.find(s=>s.id===event.skill)?.name}发动` : '敌人出现，准备战斗';
+    this.text(this.node, notice, 0, -83, 380, 42, 13, fight?.done ? C.gold : C.ink);
     if (fight) {
       this.text(this.node, running ? (fight.cooldowns.length ? fight.cooldowns.map((c:any)=>`${SKILLS.find(s=>s.id===c.id)?.name} ${c.remaining ? c.remaining+'次行动' : '就绪'}`).join(' · ') : '自动战斗 · 技能独立冷却') :
         (fight.result.rewards.gems?.length ? fight.result.rewards.gems.map((g: any) => `${GEM_TYPES.find(t=>t.id===g.type)?.name} Lv.${g.tier} ×${g.count}`).join('、') : `金币 +${fight.result.rewards.gold} · 铁矿 +${fight.result.rewards.ore} · 装备 +${fight.result.rewards.items.length}\n重铸石 +${fight.result.rewards.shards || 0} · 洗练尘 +${fight.result.rewards.dust || 0}`),
@@ -241,21 +252,21 @@ export class StarforgeGame extends Component {
         this.button(dungeon ? '返回副本' : fight.result.won ? '继续冒险' : '再次挑战', -93, -198, 175, 50, () => this.action(() => {
           const won = fight.result.won; closeEncounter(this.game);
           if (dungeon) { this.dungeonOpen = true; return; }
-          if (won) this.stage = Math.min(10, this.stage + 1);
+          if (won) this.stage = Math.min(MAX_STAGE, this.stage + 1);
           else { startEncounter(this.game, this.stage); this.combatClock = 0; }
         }), true);
         this.button('查看装备', 102, -198, 175, 50, () => this.switchTab('equipment'));
       }
-      this.text(this.node, running ? (dungeon?.mechanic || '战斗中断后会保留进度，重新进入即可继续。') : dungeon ?
+      this.text(this.node, running ? (dungeon?.mechanic || fight.mechanic || '战斗中断后会保留进度，重新进入即可继续。') : dungeon ?
         (fight.result.won ? '已解锁本难度扫荡。挑战和扫荡共享每日次数。' : '本次已消耗次数和体力，提升装备后再挑战。') :
-        fight.result.rewards.items.map((item: any) => item.name).join('、') || '背包已满时，多余战利品自动转为铁矿。',
+        `本次推进 ${fight.result.progress ?? (fight.result.won?100:0)}% · 历史最好 ${this.game.stageProgress[this.stage]||0}%\n${fight.result.rewards.items.map((item: any) => item.name).join('、') || '可回到章节页查看奖励和应对提示。'}`,
         0, -269, 380, 60, 14, C.muted);
       return;
     }
     this.button('‹', -115, -125, 50, 42, () => {
       this.stage = Math.max(1, this.stage - 1); this.render();
     });
-    this.text(this.node, `已解锁 ${this.game.stageUnlocked}/10`, 0, -125, 150, 40, 15);
+    this.text(this.node, `已解锁 ${this.game.stageUnlocked}/${MAX_STAGE}`, 0, -125, 150, 40, 15);
     this.button('›', 115, -125, 50, 42, () => {
       this.stage = Math.min(this.game.stageUnlocked, this.stage + 1); this.render();
     });
@@ -264,6 +275,26 @@ export class StarforgeGame extends Component {
     }), true);
     this.button('材料副本', 0, -263, 250, 44, () => { this.dungeonOpen = true; this.render(); });
     this.text(this.node, this.status, 0, -309, 380, 32, 12, C.muted);
+  }
+
+  private renderChapters() {
+    const info=stageInfo(this.stage);
+    this.text(this.node,'章节与通关宝箱',0,294,390,38,22,C.gold);
+    CHAPTERS.forEach((c:any,i:number)=>this.button(c.name,-130+i*130,245,124,40,()=>{this.chapterIndex=i;this.stage=i*10+1;this.status='';this.render();},i===this.chapterIndex));
+    STAGES.filter((s:any)=>s.chapter===this.chapterIndex).forEach((s:any,i:number)=>this.button(`${s.id}${s.id%10===0?' 首领':''}\n${s.id<=this.game.bestStage?'已通关':s.id<=this.game.stageUnlocked?'可挑战':'未开放'}`,-152+i%5*76,189-Math.floor(i/5)*55,70,49,()=>{this.stage=s.id;this.status='';this.render();},s.id===this.stage));
+    this.text(this.node,`${info.id} · ${info.name} · 历史最好 ${this.game.stageProgress[this.stage]||0}%`,0,82,390,38,18,C.gold);
+    this.text(this.node,info.foes.map((e:any)=>e.name).join(' → '),0,42,390,44,13,C.ink);
+    const featured=info.foes[info.foes.length-1];
+    this.text(this.node,`${featured.mechanic}\n应对：${featured.tip}`,0,-16,390,68,14,C.cyan);
+    const base=RARITIES.find(r=>r.id===info.baseRarity)!.name,bonus=RARITIES.find(r=>r.id===info.bonusRarity)!.name;
+    this.text(this.node,`胜利：${info.gold} 金币 · ${info.ore} 铁矿 · 2 件装备\n${base}装备${info.bonusChance?`，每件 ${Math.round(info.bonusChance*100)}% 概率为${bonus}`:''}\n首次通关获得 1 技能点 · 消耗 1 体力`,0,-93,390,74,13,C.muted);
+    this.button(this.stage<=this.game.stageUnlocked?'挑战所选关卡':`先通关第 ${this.stage-1} 关`,0,-165,310,44,()=>this.action(()=>{startEncounter(this.game,this.stage);this.chapterOpen=false;this.combatClock=0;}),true);
+    MILESTONES.filter((m:any)=>Math.floor((m.stage-1)/10)===this.chapterIndex).forEach((m:any,i:number)=>{
+      const claimed=this.game.milestoneClaims.includes(m.stage), ready=this.game.bestStage>=m.stage;
+      this.button(`${m.stage} 关宝箱 · ${claimed?'已领取':ready?'领取':'未达成'}\n5 件${RARITIES.find(r=>r.id===m.rarity)!.name}${SLOT_NAMES[m.slot]}\n${m.gold} 金币 · ${m.ore} 铁矿`,-98+i*196,-225,186,64,()=>this.action(()=>{claimMilestone(this.game,m.stage);this.status=`获得五件同部位装备、${m.gold} 金币和 ${m.ore} 铁矿，可前往合成`; }),ready&&!claimed);
+    });
+    this.button('返回冒险',0,-282,220,38,()=>{this.chapterOpen=false;this.stage=Math.min(this.stage,this.game.stageUnlocked);this.render();});
+    this.text(this.node,this.status,0,-317,390,30,11,C.muted);
   }
 
   private renderDungeon() {

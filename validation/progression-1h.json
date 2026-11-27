@@ -1,0 +1,376 @@
+{
+  "method": "自动管理装备、技能、有限资源副本与阶段宝箱；未使用广告、付费或资源注入",
+  "hours": 1,
+  "runs": [
+    {
+      "seed": 1201,
+      "hours": 1,
+      "bestStage": 19,
+      "wins": 34,
+      "losses": 4,
+      "dungeons": 3,
+      "merges": 17,
+      "power": 1505,
+      "gold": 418,
+      "ore": 13,
+      "bag": 5,
+      "checkpoints": [
+        {
+          "stage": 1,
+          "minutes": 0,
+          "power": 300
+        },
+        {
+          "stage": 5,
+          "minutes": 2,
+          "power": 499
+        },
+        {
+          "stage": 10,
+          "minutes": 5,
+          "power": 668
+        },
+        {
+          "stage": 15,
+          "minutes": 8,
+          "power": 959
+        }
+      ]
+    },
+    {
+      "seed": 1298,
+      "hours": 1,
+      "bestStage": 23,
+      "wins": 35,
+      "losses": 3,
+      "dungeons": 3,
+      "merges": 19,
+      "power": 2058,
+      "gold": 327,
+      "ore": 29,
+      "bag": 4,
+      "checkpoints": [
+        {
+          "stage": 1,
+          "minutes": 0,
+          "power": 311
+        },
+        {
+          "stage": 5,
+          "minutes": 2,
+          "power": 462
+        },
+        {
+          "stage": 10,
+          "minutes": 5,
+          "power": 706
+        },
+        {
+          "stage": 15,
+          "minutes": 8,
+          "power": 986
+        },
+        {
+          "stage": 20,
+          "minutes": 20,
+          "power": 1625
+        }
+      ]
+    },
+    {
+      "seed": 1395,
+      "hours": 1,
+      "bestStage": 19,
+      "wins": 34,
+      "losses": 4,
+      "dungeons": 3,
+      "merges": 16,
+      "power": 1546,
+      "gold": 493,
+      "ore": 23,
+      "bag": 9,
+      "checkpoints": [
+        {
+          "stage": 1,
+          "minutes": 0,
+          "power": 316
+        },
+        {
+          "stage": 5,
+          "minutes": 2,
+          "power": 479
+        },
+        {
+          "stage": 10,
+          "minutes": 5,
+          "power": 748
+        },
+        {
+          "stage": 15,
+          "minutes": 8,
+          "power": 1020
+        }
+      ]
+    },
+    {
+      "seed": 1492,
+      "hours": 1,
+      "bestStage": 23,
+      "wins": 35,
+      "losses": 3,
+      "dungeons": 3,
+      "merges": 19,
+      "power": 2104,
+      "gold": 324,
+      "ore": 29,
+      "bag": 4,
+      "checkpoints": [
+        {
+          "stage": 1,
+          "minutes": 0,
+          "power": 311
+        },
+        {
+          "stage": 5,
+          "minutes": 2,
+          "power": 464
+        },
+        {
+          "stage": 10,
+          "minutes": 5,
+          "power": 710
+        },
+        {
+          "stage": 15,
+          "minutes": 8,
+          "power": 1169
+        },
+        {
+          "stage": 20,
+          "minutes": 25,
+          "power": 1756
+        }
+      ]
+    },
+    {
+      "seed": 1589,
+      "hours": 1,
+      "bestStage": 19,
+      "wins": 34,
+      "losses": 4,
+      "dungeons": 3,
+      "merges": 17,
+      "power": 1554,
+      "gold": 421,
+      "ore": 13,
+      "bag": 5,
+      "checkpoints": [
+        {
+          "stage": 1,
+          "minutes": 0,
+          "power": 315
+        },
+        {
+          "stage": 5,
+          "minutes": 2,
+          "power": 472
+        },
+        {
+          "stage": 10,
+          "minutes": 5,
+          "power": 658
+        },
+        {
+          "stage": 15,
+          "minutes": 8,
+          "power": 981
+        }
+      ]
+    },
+    {
+      "seed": 1686,
+      "hours": 1,
+      "bestStage": 19,
+      "wins": 34,
+      "losses": 4,
+      "dungeons": 3,
+      "merges": 17,
+      "power": 1635,
+      "gold": 338,
+      "ore": 13,
+      "bag": 5,
+      "checkpoints": [
+        {
+          "stage": 1,
+          "minutes": 0,
+          "power": 315
+        },
+        {
+          "stage": 5,
+          "minutes": 2,
+          "power": 470
+        },
+        {
+          "stage": 10,
+          "minutes": 5,
+          "power": 667
+        },
+        {
+          "stage": 15,
+          "minutes": 7,
+          "power": 1017
+        }
+      ]
+    },
+    {
+      "seed": 1783,
+      "hours": 1,
+      "bestStage": 19,
+      "wins": 34,
+      "losses": 4,
+      "dungeons": 3,
+      "merges": 17,
+      "power": 1565,
+      "gold": 421,
+      "ore": 13,
+      "bag": 5,
+      "checkpoints": [
+        {
+          "stage": 1,
+          "minutes": 0,
+          "power": 315
+        },
+        {
+          "stage": 5,
+          "minutes": 2,
+          "power": 477
+        },
+        {
+          "stage": 10,
+          "minutes": 5,
+          "power": 714
+        },
+        {
+          "stage": 15,
+          "minutes": 7,
+          "power": 931
+        }
+      ]
+    },
+    {
+      "seed": 1880,
+      "hours": 1,
+      "bestStage": 23,
+      "wins": 35,
+      "losses": 3,
+      "dungeons": 3,
+      "merges": 18,
+      "power": 2015,
+      "gold": 382,
+      "ore": 9,
+      "bag": 8,
+      "checkpoints": [
+        {
+          "stage": 1,
+          "minutes": 0,
+          "power": 304
+        },
+        {
+          "stage": 5,
+          "minutes": 2,
+          "power": 487
+        },
+        {
+          "stage": 10,
+          "minutes": 4,
+          "power": 770
+        },
+        {
+          "stage": 15,
+          "minutes": 7,
+          "power": 1020
+        },
+        {
+          "stage": 20,
+          "minutes": 41,
+          "power": 1742
+        }
+      ]
+    },
+    {
+      "seed": 1977,
+      "hours": 1,
+      "bestStage": 19,
+      "wins": 34,
+      "losses": 4,
+      "dungeons": 3,
+      "merges": 17,
+      "power": 1671,
+      "gold": 415,
+      "ore": 13,
+      "bag": 5,
+      "checkpoints": [
+        {
+          "stage": 1,
+          "minutes": 0,
+          "power": 307
+        },
+        {
+          "stage": 5,
+          "minutes": 2,
+          "power": 468
+        },
+        {
+          "stage": 10,
+          "minutes": 5,
+          "power": 649
+        },
+        {
+          "stage": 15,
+          "minutes": 7,
+          "power": 948
+        }
+      ]
+    },
+    {
+      "seed": 2074,
+      "hours": 1,
+      "bestStage": 22,
+      "wins": 34,
+      "losses": 4,
+      "dungeons": 3,
+      "merges": 17,
+      "power": 1908,
+      "gold": 720,
+      "ore": 13,
+      "bag": 10,
+      "checkpoints": [
+        {
+          "stage": 1,
+          "minutes": 0,
+          "power": 312
+        },
+        {
+          "stage": 5,
+          "minutes": 2,
+          "power": 481
+        },
+        {
+          "stage": 10,
+          "minutes": 4,
+          "power": 629
+        },
+        {
+          "stage": 15,
+          "minutes": 7,
+          "power": 1130
+        },
+        {
+          "stage": 20,
+          "minutes": 42,
+          "power": 1670
+        }
+      ]
+    }
+  ]
+}

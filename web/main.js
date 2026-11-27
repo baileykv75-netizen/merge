@@ -1,7 +1,7 @@
 import {
   SLOTS, SLOT_NAMES, RARITIES, newGame, restoreGame, heroStats,
   itemStats, equip, toggleLock, synthesize, enhance, battle,
-  SKILLS,
+  SKILLS, MAX_STAGE, stageInfo,
   syncTime, idleReward, claimIdle, TALENTS, talentCost, upgradeTalent, DAILY_TASKS, claimDaily, salvage,
 } from './game-core.js';
 
@@ -65,13 +65,13 @@ function renderAdventure() {
   const result = combat?.done ? combat.result : null;
   screen.innerHTML = `
     <div class="battle-scene">
-      <div class="scene-top"><span class="stage-chip">第 ${selectedStage} 关 · 试炼场</span><span class="wave-chip">${combat ? `第 ${wave}/${combat.result.waveCount} 波` : '准备战斗'}</span></div>
+      <div class="scene-top"><span class="stage-chip">${selectedStage} · ${stageInfo(selectedStage).name}</span><span class="wave-chip">${combat ? `第 ${wave}/${combat.result.waveCount} 波` : '准备战斗'}</span></div>
       <img class="hero-art" src="./art/hero-sky-knight.png" alt="临时主角美术">
       <img class="enemy-art" src="./art/void-beast.png" alt="原创敌人：虚空兽">
       <div class="health-ui"><div class="health-unit">冒险者<div class="bar"><i style="width:${heroRatio}%"></i></div></div><div class="health-unit">怪物<div class="bar enemy"><i style="width:${enemyRatio}%"></i></div></div></div>
     </div>
     <section class="stage-panel panel">
-      <div class="stage-picker"><button class="minor-button" data-action="stage-prev" ${selectedStage <= 1 || combat && !combat.done ? 'disabled' : ''}>‹</button><strong>主线挑战 ${selectedStage}/10</strong><button class="minor-button" data-action="stage-next" ${selectedStage >= state.stageUnlocked || combat && !combat.done ? 'disabled' : ''}>›</button></div>
+      <div class="stage-picker"><button class="minor-button" data-action="stage-prev" ${selectedStage <= 1 || combat && !combat.done ? 'disabled' : ''}>‹</button><strong>主线挑战 ${selectedStage}/${MAX_STAGE}</strong><button class="minor-button" data-action="stage-next" ${selectedStage >= state.stageUnlocked || combat && !combat.done ? 'disabled' : ''}>›</button></div>
       <div class="stats-row"><div class="stat">战斗力<b>${h.power}</b></div><div class="stat">攻击<b>${h.attack}</b></div><div class="stat">生命<b>${h.health}</b></div></div>
       <div class="action-row"><button class="primary-button" data-action="battle" ${combat && !combat.done || state.energy < 1 ? 'disabled' : ''}>${combat && !combat.done ? '战斗中…' : '开始挑战'}</button><button class="secondary-button" data-action="equipment">查看装备</button></div>
       <p class="hint">胜利可获得 2 件装备、金币和铁矿。积累 5 件同品质装备即可合成。</p>
@@ -148,7 +148,7 @@ function runCombat() {
     if (!event) {
       clearInterval(combatTimer); combatTimer = null; combat.done = true;
       combat.lines.push(result.won ? '✦ 敌人全部击败，关卡通过！' : '✧ 骑士力竭，先提升装备再来。');
-      if (result.won) selectedStage = Math.min(10, selectedStage + 1);
+      if (result.won) selectedStage = Math.min(MAX_STAGE, selectedStage + 1);
       render(); return;
     }
     if (event.type === 'wave') {
@@ -159,6 +159,8 @@ function runCombat() {
       combat.lines.push(`${SKILLS.find(s=>s.id===event.skill)?.name || '普通攻击'}，造成 ${event.damage} 伤害`);
     } else if (event.type === 'buff') {
       combat.lines.push(`${SKILLS.find(s=>s.id===event.skill)?.name}发动`);
+    } else if (event.type === 'enemyStatus') {
+      combat.lines.push(event.text);
     } else if (event.type === 'enemyHeal') {
       combat.enemyHp = event.enemyHp;
       combat.lines.push(`敌人恢复 ${event.amount} 生命`);

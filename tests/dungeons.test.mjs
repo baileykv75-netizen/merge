@@ -53,7 +53,7 @@ test('特殊攻击和恢复来自各副本机制',()=>{
 });
 test('V3迁移保留装备货币，损坏次数与难度拒绝加载',()=>{
   const s=ready();s.version=3;delete s.dungeonDay;delete s.dungeonClears;delete s.dungeonAttempts;
-  const r=restoreGame(s,T);assert.ok(r);assert.equal(r.version,6);assert.deepEqual(r.equipped,s.equipped);assert.equal(r.gold,s.gold);
+  const r=restoreGame(s,T);assert.ok(r);assert.equal(r.version,7);assert.deepEqual(r.equipped,s.equipped);assert.equal(r.gold,s.gold);
   r.dungeonAttempts.gold=4;assert.equal(restoreGame(r,T),null);
   r.dungeonAttempts.gold=0;r.dungeonClears.ore=3;assert.equal(restoreGame(r,T),null);
 });

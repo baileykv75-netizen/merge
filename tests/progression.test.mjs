@@ -73,7 +73,7 @@ test('旧存档迁移保持装备货币，不凭空赠送离线收益；损坏�
   const s = newGame(7, T); s.version = 1;
   for (const k of ['clock','energyAt','idleAt','idleOreRemainder','talents','daily']) delete s[k];
   const restored = restoreGame(s, T);
-  assert.ok(restored); assert.equal(restored.version, 6);
+  assert.ok(restored); assert.equal(restored.version, 7);
   assert.equal(restored.gold, s.gold); assert.deepEqual(restored.equipped, s.equipped);
   assert.equal(idleReward(restored, T).gold, 0);
   const corrupt = structuredClone(restored); corrupt.equipped.weapon.attack = null;

@@ -1,11 +1,52 @@
 // @ts-nocheck
 /** 装备合成原型的跨平台规则。只使用标准 JavaScript，网页和 Cocos 共用。 */
 
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
+export const ENEMIES = {
+  scout:{name:'荒原游兽',health:1,attack:1,mechanic:'普通攻击',tip:'穿戴完整装备，提高基础属性'},
+  raider:{name:'掠夺者',health:0.95,attack:1,mechanic:'每三次攻击发动伏击',tip:'生命与坚守可承受伏击'},
+  bulwark:{name:'铁甲卫士',health:1.15,attack:0.9,armor:0.25,mechanic:'护甲抵消 25% 直接伤害',tip:'破甲斩与毒伤可绕过护甲'},
+  mender:{name:'腐根祭司',health:1.1,attack:0.9,heal:0.08,mechanic:'每三次攻击恢复 8% 生命',tip:'淬毒期间恢复量减半，爆发伤害能压过恢复'},
+  hexer:{name:'沼泽巫妖',health:0.9,attack:1.1,elemental:true,mechanic:'元素攻击；每三次发动灼烧',tip:'元素抗性词条与复苏提升续航'},
+  berserker:{name:'狂战守卫',health:1.1,attack:1,enrage:1.4,mechanic:'生命低于一半后伤害提高 40%',tip:'保留生存能力，使用高伤技能结束战斗'},
+  chief:{name:'荒原统领',health:1.8,attack:1.05,charge:3,boss:true,mechanic:'蓄力后发动 2.2 倍重击',tip:'蓄力会提前提示；坚守与生命宝石有助于生存'},
+  rootlord:{name:'腐根之主',health:2,attack:1,heal:0.12,elemental:true,boss:true,mechanic:'每三次攻击恢复 12% 生命，并造成元素伤害',tip:'淬毒抑制恢复，配合伤害技能突破回复'},
+  warden:{name:'熔铁典狱长',health:2.1,attack:1.1,armor:0.35,enrage:1.5,charge:4,boss:true,mechanic:'35% 护甲；半血狂暴；每四次攻击发动重击',tip:'破甲斩、淬毒和坚守可组成攻防方案'},
+};
+export const CHAPTERS = [
+  {name:'荒原边境',description:'清理荒原道路，突破掠夺者的营寨。',names:['边境小径','碎石坡','废弃哨站','岔路伏兵','旧堡外墙','巡逻营地','铁甲关隘','荒原深处','营寨前哨','统领营帐'],
+    waves:[['scout','scout'],['scout','raider'],['raider','scout'],['scout','raider','scout'],['scout','bulwark','raider'],['raider','scout','raider'],['scout','bulwark','bulwark'],['raider','bulwark','raider'],['bulwark','raider','bulwark'],['raider','bulwark','chief']]},
+  {name:'腐根湿地',description:'穿越毒雾，打断腐根生物的恢复。',names:['湿地入口','雾中栈道','腐木营地','祭司林地','深水渡口','毒雾迷径','朽根祭坛','双生古树','王庭护卫','腐根王庭'],
+    waves:[['scout','mender','scout'],['hexer','scout','mender'],['raider','mender','hexer'],['mender','hexer','mender'],['bulwark','hexer','mender'],['hexer','hexer','raider'],['mender','bulwark','mender'],['mender','hexer','mender','hexer'],['bulwark','mender','hexer','berserker'],['hexer','mender','bulwark','rootlord']]},
+  {name:'熔铁要塞',description:'应对重甲与狂暴，击败典狱长。',names:['要塞大门','熔渣阶梯','军械库','熔炉回廊','重甲工坊','断链监牢','狂战大厅','内城高墙','典狱长近卫','熔铁王座'],
+    waves:[['bulwark','raider','berserker','bulwark'],['hexer','bulwark','berserker','hexer'],['bulwark','bulwark','raider','berserker'],['hexer','mender','bulwark','berserker'],['bulwark','berserker','bulwark','berserker'],['berserker','mender','hexer','bulwark'],['berserker','berserker','bulwark','berserker'],['hexer','bulwark','mender','berserker'],['bulwark','berserker','bulwark','berserker'],['berserker','hexer','bulwark','warden']]},
+];
+export const STAGES = CHAPTERS.flatMap((c,chapter)=>c.names.map((name,index)=>({id:chapter*10+index+1,name,chapter,waves:c.waves[index]})));
+export const MAX_STAGE = STAGES.length;
+export const MILESTONES = [5,10,15,20,25,30].map((stage,i)=>({stage,rarity:['common','fine','fine','rare','rare','epic'][i],slot:i%2?'armor':'weapon',gold:200+i*150,ore:25+i*15}));
+export function stageInfo(stage) {
+  const def=STAGES[stage-1];if(!Number.isInteger(stage)||!def)throw new Error('关卡不存在');
+  const base=def.chapter===0?'common':def.chapter===1?'fine':'rare';
+  const bonus=def.chapter===0?'fine':def.chapter===1?'rare':'epic';
+  const chance=stage%10>=5||stage%10===0 ? (def.chapter===2?0.1:0.18):0;
+  const growth=Math.max(0,stage-8);
+  const foes=def.waves.map((id,i)=>({...ENEMIES[id],id,maxHp:Math.round((33+stage*13+(i+1)*10)*ENEMIES[id].health*(1+growth*0.12)),damage:(3+stage*2+i+1)*ENEMIES[id].attack*(1+growth*0.08)}));
+  return {...def,chapterName:CHAPTERS[def.chapter].name,foes,gold:35+stage*18,ore:3+stage,baseRarity:base,bonusRarity:bonus,bonusChance:chance};
+}
+export function claimMilestone(state,stage) {
+  gemGuard(state);const prize=MILESTONES.find(m=>m.stage===stage);
+  if(!prize||state.bestStage<stage)throw new Error('尚未达成通关目标');
+  if(state.milestoneClaims.includes(stage))throw new Error('该宝箱已领取');
+  if(state.bag.length>95)throw new Error('请先在背包留出 5 个空位');
+  const items=Array.from({length:5},()=>makeItem(state,prize.rarity,prize.slot));
+  state.bag.push(...items);state.gold+=prize.gold;state.ore+=prize.ore;state.milestoneClaims.push(stage);
+  state.history.unshift(`领取第 ${stage} 关宝箱：五件同部位装备，可用于合成`);state.history=state.history.slice(0,20);
+  return {...prize,items};
+}
 export const SKILLS = [
   {id:'slash',name:'强力突刺',unlock:0,prerequisite:null,required:0,cooldown:3,description:'造成攻击力 170% / 195% / 220% 伤害'},
   {id:'mend',name:'复苏',unlock:2,prerequisite:null,required:0,cooldown:5,description:'恢复最大生命的 12% / 16% / 20%'},
-  {id:'cleave',name:'破甲斩',unlock:3,prerequisite:'slash',required:2,cooldown:4,description:'造成 215% / 250% / 285% 伤害，穿透矿坑护甲'},
+  {id:'cleave',name:'破甲斩',unlock:3,prerequisite:'slash',required:2,cooldown:4,description:'造成 215% / 250% / 285% 伤害，穿透敌人护甲'},
   {id:'guard',name:'坚守',unlock:4,prerequisite:'mend',required:1,cooldown:5,description:'接下来两次受击减少 35% / 45% / 55% 伤害'},
   {id:'venom',name:'淬毒',unlock:6,prerequisite:'cleave',required:1,cooldown:6,description:'连续三次行动造成攻击力 30% / 40% / 50% 毒伤'},
   {id:'fury',name:'战吼',unlock:8,prerequisite:'guard',required:1,cooldown:7,description:'接下来三次攻击增强 30% / 40% / 50%'},
@@ -105,6 +146,8 @@ export function newGame(seed = Date.now(), now = Date.now()) {
     nextItemId: 1,
     stageUnlocked: 1,
     bestStage: 0,
+    stageProgress: {},
+    milestoneClaims: [],
     gold: 120,
     ore: 25,
     shards: 0,
@@ -243,15 +286,17 @@ export function enhance(state, slot, now = Date.now()) {
 export function battle(state, stage, now = Date.now()) {
   guardForge(state);
   if (state.encounter) throw new Error('请先完成当前战斗');
-  if (!Number.isInteger(stage) || stage < 1 || stage > 10 || stage > state.stageUnlocked) {
+  if (!Number.isInteger(stage) || stage < 1 || stage > MAX_STAGE || stage > state.stageUnlocked) {
     throw new Error("关卡尚未开放");
   }
   syncTime(state, now);
   if (state.energy < 1) throw new Error("体力不足");
   state.energy -= 1;
   const combat = simulateCombat(state, stage);
+  const info = stageInfo(stage);
   const { won } = combat;
-  const rewards = { gold: won ? 35 + stage * 18 : 10 + stage * 3, ore: won ? 3 + stage : 0, items: [] };
+  state.stageProgress[stage]=Math.max(state.stageProgress[stage]||0,combat.progress);
+  const rewards = { gold: won ? info.gold : 10 + stage * 3, ore: won ? info.ore : 0, items: [] };
   rewards.shards = won && stage >= 3 ? 1 + Math.floor(stage / 5) : 0;
   rewards.dust = won && stage >= 5 ? 1 + Math.floor(stage / 7) : 0;
   state.shards += rewards.shards;
@@ -261,7 +306,7 @@ export function battle(state, stage, now = Date.now()) {
   if (won) {
     state.daily.wins += 1;
     for (let i = 0; i < 2; i++) {
-      const rarity = stage >= 5 && random(state) < 0.18 ? "fine" : "common";
+      const rarity = info.bonusChance && random(state) < info.bonusChance ? info.bonusRarity : info.baseRarity;
       const item = makeItem(state, rarity);
       if (state.bag.length < 100) {
         state.bag.push(item);
@@ -274,7 +319,7 @@ export function battle(state, stage, now = Date.now()) {
       }
     }
     state.bestStage = Math.max(state.bestStage, stage);
-    state.stageUnlocked = Math.min(10, Math.max(state.stageUnlocked, stage + 1));
+    state.stageUnlocked = Math.min(MAX_STAGE, Math.max(state.stageUnlocked, stage + 1));
   }
   state.history.unshift(`${won ? "通关" : "挑战失败"} 第 ${stage} 关，获得 ${rewards.gold} 金币`);
   state.history = state.history.slice(0, 20);
@@ -285,18 +330,23 @@ function simulateCombat(state, stage, profile = null) {
   const hero = heroStats(state);
   let heroHp = hero.health;
   const events = [];
-  const waveCount = stage < 4 ? 2 : stage < 8 ? 3 : 4;
+  const mainInfo=profile ? null : stageInfo(stage);
+  const waveCount = mainInfo ? mainInfo.waves.length : stage < 4 ? 2 : stage < 8 ? 3 : 4;
   const equippedSkills = state.skillLoadouts[state.activeLoadout].filter(Boolean);
   const readyAt = Object.fromEntries(equippedSkills.map(id => [id, SKILLS.find(s=>s.id===id).cooldown]));
   let tick = 0, shield = 0, shieldRate = 0, fury = 0, furyRate = 0;
   let won = true;
+  let progress = 0;
   for (let wave = 1; wave <= waveCount; wave++) {
-    let enemyHp = Math.round((33 + stage * 13 + wave * 10) * (profile === 'ore' ? 1.15 : 1));
+    const enemyId=mainInfo?.waves[wave-1], foe=mainInfo?.foes[wave-1];
+    const armor=foe?.armor || (profile==='ore'?0.18:0);
+    let enemyHp = foe?.maxHp || Math.round((33 + stage * 13 + wave * 10) * (profile === 'ore' ? 1.15 : 1));
     const enemyMaxHp = enemyHp;
-    const enemyDamage = 3 + stage * 2 + wave;
-    events.push({ type: "wave", wave, maxHp: enemyHp });
+    const enemyDamage = foe?.damage || 3 + stage * 2 + wave;
+    events.push({ type: "wave", wave, maxHp: enemyHp, ...(foe?{enemyId,enemyName:foe.name,mechanic:foe.mechanic,boss:!!foe.boss}:{}) });
     let turn = 0;
     let poison = 0, poisonDamage = 0;
+    let enraged = false;
     while (enemyHp > 0 && heroHp > 0 && turn < 100) {
       turn += 1;
       tick += 1;
@@ -319,48 +369,52 @@ function simulateCombat(state, stage, profile = null) {
         }
         readyAt[id] = tick + definition.cooldown;
       }
-      if (poison > 0) {
+      const poisoned = poison > 0;
+      if (poisoned) {
         poison--; const damage = Math.min(enemyHp,poisonDamage); enemyHp -= damage;
         events.push({type:'hero',wave,damage,enemyHp,skill:'venom',critical:false});
         if (enemyHp<=0) break;
       }
       const critical = random(state) < hero.crit;
       const skillPower = skill === 'slash' ? 1.45+0.25*state.skills.slash : skill === 'cleave' ? 1.8+0.35*state.skills.cleave : 1;
-      const damage = Math.max(1, Math.round(hero.attack * skillPower * (fury>0 ? 1+furyRate : 1) * (critical ? 1.5 : 1) * (profile === 'ore' && skill !== 'cleave' ? 0.82 : 1) * (0.9 + random(state) * 0.2)));
+      const damage = Math.max(1, Math.round(hero.attack * skillPower * (fury>0 ? 1+furyRate : 1) * (critical ? 1.5 : 1) * (skill !== 'cleave' ? 1-armor : 1) * (0.9 + random(state) * 0.2)));
       if (fury>0) fury--;
       enemyHp = Math.max(0, enemyHp - damage);
       const cooldowns = equippedSkills.map(id=>({id,remaining:Math.max(0,readyAt[id]-tick)}));
       events.push({ type: "hero", wave, damage, skill, critical, enemyHp, cooldowns });
       if (enemyHp <= 0) break;
-      const ability = turn % 3 === 0 && profile === 'gold' ? '伏击' : turn % 3 === 0 && profile === 'shards' ? '灼烧' : turn % 3 === 0 && profile === 'gems' ? '碎晶重击' : '';
-      const multiplier = ability === '伏击' ? 2 : ability ? 1.5 : 1;
-      const taken = Math.max(1, Math.round((enemyDamage * multiplier * (0.9 + random(state) * 0.2) - hero.defense * 0.22) * (profile === 'shards' || wave % 2 === 0 ? 1 - hero.resist : 1) * (shield>0 ? 1-shieldRate : 1)));
+      if(foe?.enrage && enemyHp<=enemyMaxHp/2 && !enraged){enraged=true;events.push({type:'enemyStatus',wave,text:`${foe.name}进入狂暴，伤害提高 ${Math.round((foe.enrage-1)*100)}%`});}
+      const ability = foe?.charge && turn%foe.charge===0 ? '蓄力重击' : turn % 3 === 0 && (profile === 'gold'||enemyId==='raider') ? '伏击' : turn % 3 === 0 && (profile === 'shards'||enemyId==='hexer') ? '灼烧' : turn % 3 === 0 && profile === 'gems' ? '碎晶重击' : '';
+      const multiplier = ability === '蓄力重击' ? 2.2 : ability === '伏击' ? 2 : ability ? 1.5 : 1;
+      const taken = Math.max(1, Math.round((enemyDamage * multiplier * (enraged?foe.enrage:1) * (0.9 + random(state) * 0.2) - hero.defense * 0.22) * (profile === 'shards' || foe?.elemental ? 1 - hero.resist : 1) * (shield>0 ? 1-shieldRate : 1)));
       if (shield>0) shield--;
       heroHp = Math.max(0, heroHp - taken);
       events.push({ type: "enemy", wave, damage: taken, heroHp, ability });
-      if (heroHp > 0 && profile === 'dust' && turn % 3 === 0) {
-        const amount = Math.min(enemyMaxHp - enemyHp, Math.ceil(enemyMaxHp * 0.1));
+      if(heroHp>0 && foe?.charge && turn%foe.charge===foe.charge-1)events.push({type:'enemyStatus',wave,text:`${foe.name}正在蓄力，下次攻击发动重击`});
+      if (heroHp > 0 && (profile === 'dust'||foe?.heal) && turn % 3 === 0) {
+        const amount = Math.min(enemyMaxHp - enemyHp, Math.ceil(enemyMaxHp * (foe?.heal||0.1) * (poisoned?0.5:1)));
         enemyHp += amount;
-        events.push({type:'enemyHeal', wave, amount, enemyHp});
+        events.push({type:'enemyHeal', wave, amount, enemyHp, suppressed:poisoned});
       }
       if (heroHp > 0 && hero.regen) {
         heroHp = Math.min(hero.health, heroHp + hero.regen);
         events.push({ type: 'heal', wave, heroHp, amount: hero.regen });
       }
     }
+    progress=Math.round((wave-1+(1-enemyHp/enemyMaxHp))/waveCount*100);
     if (heroHp <= 0 || turn >= 100) { won = false; break; }
   }
-  return { won, stage, waveCount, heroHp, maxHeroHp: hero.health, events };
+  return { won, stage, waveCount, heroHp, maxHeroHp: hero.health, events, progress:won?100:Math.min(99,progress) };
 }
 
 /** @param {unknown} value */
 export function restoreGame(value, now = Date.now()) {
-  if (!value || typeof value !== "object" || ![1, 2, 3, 4, 5, SAVE_VERSION].includes(value.version)) return null;
+  if (!value || typeof value !== "object" || ![1, 2, 3, 4, 5, 6, SAVE_VERSION].includes(value.version)) return null;
   if (!Array.isArray(value.bag) || !value.equipped || !Number.isInteger(value.seed)) return null;
-  if (!Number.isInteger(value.stageUnlocked) || value.stageUnlocked < 1 || value.stageUnlocked > 10) return null;
+  if (!Number.isInteger(value.stageUnlocked) || value.stageUnlocked < 1 || value.stageUnlocked > MAX_STAGE) return null;
   const validNumber = n => Number.isSafeInteger(n) && n >= 0;
   if (!['gold', 'ore', 'energy', 'bestStage', 'nextItemId'].every(k => validNumber(value[k]))) return null;
-  if (value.energy > ENERGY_CAP || value.bestStage > 10 || value.nextItemId < 1 || value.bag.length > 100) return null;
+  if (value.energy > ENERGY_CAP || value.bestStage > MAX_STAGE || value.nextItemId < 1 || value.bag.length > 100) return null;
   if (!Array.isArray(value.history) || value.history.some(x => typeof x !== 'string')) return null;
   const all = [...value.bag];
   for (const slot of SLOTS) {
@@ -400,6 +454,13 @@ export function restoreGame(value, now = Date.now()) {
     state.skills = initialSkills(); state.skillLoadouts = [['slash',null,null],['slash',null,null]];
     state.activeLoadout = 0; state.version = SAVE_VERSION;
   }
+  if(oldVersion<7){
+    state.version=SAVE_VERSION;state.milestoneClaims=[];
+    state.stageProgress=Object.fromEntries(Array.from({length:state.bestStage},(_,i)=>[i+1,100]));
+    state.stageUnlocked=Math.max(state.stageUnlocked,Math.min(MAX_STAGE,state.bestStage+1));
+  }
+  if(!Array.isArray(state.milestoneClaims)||new Set(state.milestoneClaims).size!==state.milestoneClaims.length||state.milestoneClaims.some(s=>s>state.bestStage||!MILESTONES.some(m=>m.stage===s)))return null;
+  if(!state.stageProgress||typeof state.stageProgress!=='object'||Array.isArray(state.stageProgress)||Object.entries(state.stageProgress).some(([s,p])=>!STAGES.some(d=>String(d.id)===s)||!validNumber(p)||p>100))return null;
   if (!state.skills || SKILLS.some(s => !validNumber(state.skills[s.id]) || state.skills[s.id]>3 ||
     (state.skills[s.id]>0 && (state.bestStage<s.unlock || (s.prerequisite && state.skills[s.prerequisite]<s.required)))) || state.skills.slash<1 || skillPoints(state)<0) return null;
   if (![0,1].includes(state.activeLoadout) || !Array.isArray(state.skillLoadouts) || state.skillLoadouts.length!==2 || state.skillLoadouts.some(loadout =>
@@ -439,7 +500,7 @@ function validEncounter(encounter) {
   const r = encounter?.result;
   const nonnegative = x => Number.isSafeInteger(x) && x >= 0;
   if (r?.kind != null && (r.kind !== 'dungeon' || !DUNGEONS.some(d => d.id === r.dungeonId) || !Number.isInteger(r.difficulty) || r.difficulty < 0 || r.difficulty > 2)) return false;
-  if (!r || typeof r.won !== 'boolean' || !Number.isInteger(r.stage) || r.stage < 1 || r.stage > 10
+  if (!r || typeof r.won !== 'boolean' || !Number.isInteger(r.stage) || r.stage < 1 || r.stage > MAX_STAGE
     || !Number.isInteger(r.waveCount) || r.waveCount < 2 || r.waveCount > 4
     || !nonnegative(r.heroHp) || !nonnegative(r.maxHeroHp) || r.maxHeroHp < 1 || r.heroHp > r.maxHeroHp
     || !Array.isArray(r.events) || r.events.length > 1500 || !nonnegative(encounter.cursor)
@@ -451,7 +512,8 @@ function validEncounter(encounter) {
     e.type === 'enemy' ? nonnegative(e.damage) && nonnegative(e.heroHp) && e.heroHp <= r.maxHeroHp :
     e.type === 'heal' ? nonnegative(e.amount) && nonnegative(e.heroHp) && e.heroHp <= r.maxHeroHp :
     e.type === 'enemyHeal' ? nonnegative(e.amount) && nonnegative(e.enemyHp) :
-    e.type === 'buff' ? ['guard','venom','fury'].includes(e.skill) : false));
+    e.type === 'buff' ? ['guard','venom','fury'].includes(e.skill) :
+    e.type === 'enemyStatus' ? typeof e.text==='string' && e.text.length<100 : false));
 }
 
 // 开始时仅结算一次；后续播放、加速、恢复和确认结果均不再发奖。
@@ -475,10 +537,10 @@ export function encounterView(state) {
   const c = state.encounter;
   if (!c) return null;
   const view = { heroHp: c.result.maxHeroHp, enemyHp: 0, enemyMaxHp: 1, wave: 1,
-    attacks: 0, last: null, cooldowns: [], done: c.cursor === c.result.events.length, result: c.result };
+    attacks: 0, last: null, cooldowns: [], enemyName:'敌人',mechanic:'',boss:false, done: c.cursor === c.result.events.length, result: c.result };
   for (const e of c.result.events.slice(0, c.cursor)) {
     view.last = e; view.wave = e.wave;
-    if (e.type === 'wave') { view.enemyHp = e.maxHp; view.enemyMaxHp = e.maxHp; view.attacks = 0; }
+    if (e.type === 'wave') { view.enemyHp = e.maxHp; view.enemyMaxHp = e.maxHp; view.attacks = 0;view.enemyName=e.enemyName||'敌人';view.mechanic=e.mechanic||'';view.boss=!!e.boss; }
     if (e.type === 'hero') { view.enemyHp = e.enemyHp; view.attacks++; }
     if (e.cooldowns) view.cooldowns = e.cooldowns;
     if (e.type === 'enemyHeal') view.enemyHp = e.enemyHp;
