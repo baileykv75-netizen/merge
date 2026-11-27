@@ -1,6 +1,7 @@
 import {
   SLOTS, SLOT_NAMES, RARITIES, newGame, restoreGame, heroStats,
   itemStats, equip, toggleLock, synthesize, enhance, battle,
+  SKILLS,
   syncTime, idleReward, claimIdle, TALENTS, talentCost, upgradeTalent, DAILY_TASKS, claimDaily, salvage,
 } from './game-core.js';
 
@@ -155,7 +156,12 @@ function runCombat() {
       combat.lines.push(`第 ${event.wave} 波敌人出现`);
     } else if (event.type === 'hero') {
       combat.enemyHp = event.enemyHp;
-      combat.lines.push(`${event.skill ? '✦ 强力突刺' : '普通攻击'}，造成 ${event.damage} 伤害`);
+      combat.lines.push(`${SKILLS.find(s=>s.id===event.skill)?.name || '普通攻击'}，造成 ${event.damage} 伤害`);
+    } else if (event.type === 'buff') {
+      combat.lines.push(`${SKILLS.find(s=>s.id===event.skill)?.name}发动`);
+    } else if (event.type === 'enemyHeal') {
+      combat.enemyHp = event.enemyHp;
+      combat.lines.push(`敌人恢复 ${event.amount} 生命`);
     } else if (event.type === 'heal') {
       combat.displayHp = event.heroHp;
       combat.lines.push(`装备恢复 ${event.amount} 生命`);

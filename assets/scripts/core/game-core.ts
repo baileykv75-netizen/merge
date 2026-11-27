@@ -1,7 +1,16 @@
 // @ts-nocheck
 /** 装备合成原型的跨平台规则。只使用标准 JavaScript，网页和 Cocos 共用。 */
 
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
+export const SKILLS = [
+  {id:'slash',name:'强力突刺',unlock:0,prerequisite:null,required:0,cooldown:3,description:'造成攻击力 170% / 195% / 220% 伤害'},
+  {id:'mend',name:'复苏',unlock:2,prerequisite:null,required:0,cooldown:5,description:'恢复最大生命的 12% / 16% / 20%'},
+  {id:'cleave',name:'破甲斩',unlock:3,prerequisite:'slash',required:2,cooldown:4,description:'造成 215% / 250% / 285% 伤害，穿透矿坑护甲'},
+  {id:'guard',name:'坚守',unlock:4,prerequisite:'mend',required:1,cooldown:5,description:'接下来两次受击减少 35% / 45% / 55% 伤害'},
+  {id:'venom',name:'淬毒',unlock:6,prerequisite:'cleave',required:1,cooldown:6,description:'连续三次行动造成攻击力 30% / 40% / 50% 毒伤'},
+  {id:'fury',name:'战吼',unlock:8,prerequisite:'guard',required:1,cooldown:7,description:'接下来三次攻击增强 30% / 40% / 50%'},
+];
+function initialSkills() { return Object.fromEntries(SKILLS.map(s => [s.id,s.id==='slash'?1:0])); }
 export const GEM_TYPES = [
   {id:'ruby',name:'赤晶',stat:'attack',label:'攻击',base:3,slots:['weapon','ring','amulet']},
   {id:'emerald',name:'翠晶',stat:'health',label:'生命',base:20,slots:['helmet','armor','amulet']},
@@ -101,6 +110,9 @@ export function newGame(seed = Date.now(), now = Date.now()) {
     shards: 0,
     dust: 0,
     gems: emptyGems(),
+    skills: initialSkills(),
+    skillLoadouts: [['slash',null,null],['slash',null,null]],
+    activeLoadout: 0,
     energy: 30,
     bag: [],
     equipped: Object.fromEntries(SLOTS.map((slot) => [slot, null])),
@@ -274,6 +286,9 @@ function simulateCombat(state, stage, profile = null) {
   let heroHp = hero.health;
   const events = [];
   const waveCount = stage < 4 ? 2 : stage < 8 ? 3 : 4;
+  const equippedSkills = state.skillLoadouts[state.activeLoadout].filter(Boolean);
+  const readyAt = Object.fromEntries(equippedSkills.map(id => [id, SKILLS.find(s=>s.id===id).cooldown]));
+  let tick = 0, shield = 0, shieldRate = 0, fury = 0, furyRate = 0;
   let won = true;
   for (let wave = 1; wave <= waveCount; wave++) {
     let enemyHp = Math.round((33 + stage * 13 + wave * 10) * (profile === 'ore' ? 1.15 : 1));
@@ -281,17 +296,46 @@ function simulateCombat(state, stage, profile = null) {
     const enemyDamage = 3 + stage * 2 + wave;
     events.push({ type: "wave", wave, maxHp: enemyHp });
     let turn = 0;
+    let poison = 0, poisonDamage = 0;
     while (enemyHp > 0 && heroHp > 0 && turn < 100) {
       turn += 1;
-      const skill = turn % 3 === 0;
+      tick += 1;
+      let skill = null;
+      for (const id of equippedSkills) {
+        const definition = SKILLS.find(s=>s.id===id), level = state.skills[id];
+        if (tick < readyAt[id]) continue;
+        if (id === 'slash' || id === 'cleave') {
+          if (skill) continue;
+          skill = id;
+        } else if (id === 'mend') {
+          if (heroHp === hero.health) continue;
+          const amount = Math.min(hero.health-heroHp,Math.round(hero.health*(0.08+level*0.04)));
+          heroHp += amount; events.push({type:'heal',wave,heroHp,amount,skill:id});
+        } else {
+          if (id === 'guard') { shield=2;shieldRate=0.25+0.1*level; }
+          if (id === 'fury') { fury=3;furyRate=0.2+0.1*level; }
+          if (id === 'venom') { poison=3;poisonDamage=Math.max(1,Math.round(hero.attack*(0.2+0.1*level))); }
+          events.push({type:'buff',wave,skill:id});
+        }
+        readyAt[id] = tick + definition.cooldown;
+      }
+      if (poison > 0) {
+        poison--; const damage = Math.min(enemyHp,poisonDamage); enemyHp -= damage;
+        events.push({type:'hero',wave,damage,enemyHp,skill:'venom',critical:false});
+        if (enemyHp<=0) break;
+      }
       const critical = random(state) < hero.crit;
-      const damage = Math.max(1, Math.round(hero.attack * (skill ? 1.7 : 1) * (critical ? 1.5 : 1) * (profile === 'ore' ? 0.82 : 1) * (0.9 + random(state) * 0.2)));
+      const skillPower = skill === 'slash' ? 1.45+0.25*state.skills.slash : skill === 'cleave' ? 1.8+0.35*state.skills.cleave : 1;
+      const damage = Math.max(1, Math.round(hero.attack * skillPower * (fury>0 ? 1+furyRate : 1) * (critical ? 1.5 : 1) * (profile === 'ore' && skill !== 'cleave' ? 0.82 : 1) * (0.9 + random(state) * 0.2)));
+      if (fury>0) fury--;
       enemyHp = Math.max(0, enemyHp - damage);
-      events.push({ type: "hero", wave, damage, skill, critical, enemyHp });
+      const cooldowns = equippedSkills.map(id=>({id,remaining:Math.max(0,readyAt[id]-tick)}));
+      events.push({ type: "hero", wave, damage, skill, critical, enemyHp, cooldowns });
       if (enemyHp <= 0) break;
       const ability = turn % 3 === 0 && profile === 'gold' ? '伏击' : turn % 3 === 0 && profile === 'shards' ? '灼烧' : turn % 3 === 0 && profile === 'gems' ? '碎晶重击' : '';
       const multiplier = ability === '伏击' ? 2 : ability ? 1.5 : 1;
-      const taken = Math.max(1, Math.round((enemyDamage * multiplier * (0.9 + random(state) * 0.2) - hero.defense * 0.22) * (profile === 'shards' || wave % 2 === 0 ? 1 - hero.resist : 1)));
+      const taken = Math.max(1, Math.round((enemyDamage * multiplier * (0.9 + random(state) * 0.2) - hero.defense * 0.22) * (profile === 'shards' || wave % 2 === 0 ? 1 - hero.resist : 1) * (shield>0 ? 1-shieldRate : 1)));
+      if (shield>0) shield--;
       heroHp = Math.max(0, heroHp - taken);
       events.push({ type: "enemy", wave, damage: taken, heroHp, ability });
       if (heroHp > 0 && profile === 'dust' && turn % 3 === 0) {
@@ -311,7 +355,7 @@ function simulateCombat(state, stage, profile = null) {
 
 /** @param {unknown} value */
 export function restoreGame(value, now = Date.now()) {
-  if (!value || typeof value !== "object" || ![1, 2, 3, 4, SAVE_VERSION].includes(value.version)) return null;
+  if (!value || typeof value !== "object" || ![1, 2, 3, 4, 5, SAVE_VERSION].includes(value.version)) return null;
   if (!Array.isArray(value.bag) || !value.equipped || !Number.isInteger(value.seed)) return null;
   if (!Number.isInteger(value.stageUnlocked) || value.stageUnlocked < 1 || value.stageUnlocked > 10) return null;
   const validNumber = n => Number.isSafeInteger(n) && n >= 0;
@@ -352,6 +396,15 @@ export function restoreGame(value, now = Date.now()) {
     for (const item of [...state.bag,...Object.values(state.equipped)].filter(Boolean)) item.sockets = [null];
   }
   const gemKeys = Object.keys(emptyGems());
+  if (oldVersion < 6) {
+    state.skills = initialSkills(); state.skillLoadouts = [['slash',null,null],['slash',null,null]];
+    state.activeLoadout = 0; state.version = SAVE_VERSION;
+  }
+  if (!state.skills || SKILLS.some(s => !validNumber(state.skills[s.id]) || state.skills[s.id]>3 ||
+    (state.skills[s.id]>0 && (state.bestStage<s.unlock || (s.prerequisite && state.skills[s.prerequisite]<s.required)))) || state.skills.slash<1 || skillPoints(state)<0) return null;
+  if (![0,1].includes(state.activeLoadout) || !Array.isArray(state.skillLoadouts) || state.skillLoadouts.length!==2 || state.skillLoadouts.some(loadout =>
+    !Array.isArray(loadout) || loadout.length!==3 || new Set(loadout.filter(Boolean)).size!==loadout.filter(Boolean).length ||
+    loadout.some(id=>id!==null && (!SKILLS.some(s=>s.id===id) || !state.skills[id])))) return null;
   if (!state.gems || typeof state.gems !== 'object' || Object.keys(state.gems).length !== gemKeys.length || gemKeys.some(k => !validNumber(state.gems[k]))) return null;
   for (const item of [...state.bag,...Object.values(state.equipped)].filter(Boolean)) {
     if (!Array.isArray(item.sockets) || item.sockets.length < 1 || item.sockets.length > 2 || item.sockets.some(gem =>
@@ -397,7 +450,8 @@ function validEncounter(encounter) {
     e.type === 'hero' ? nonnegative(e.damage) && nonnegative(e.enemyHp) :
     e.type === 'enemy' ? nonnegative(e.damage) && nonnegative(e.heroHp) && e.heroHp <= r.maxHeroHp :
     e.type === 'heal' ? nonnegative(e.amount) && nonnegative(e.heroHp) && e.heroHp <= r.maxHeroHp :
-    e.type === 'enemyHeal' ? nonnegative(e.amount) && nonnegative(e.enemyHp) : false));
+    e.type === 'enemyHeal' ? nonnegative(e.amount) && nonnegative(e.enemyHp) :
+    e.type === 'buff' ? ['guard','venom','fury'].includes(e.skill) : false));
 }
 
 // 开始时仅结算一次；后续播放、加速、恢复和确认结果均不再发奖。
@@ -421,11 +475,12 @@ export function encounterView(state) {
   const c = state.encounter;
   if (!c) return null;
   const view = { heroHp: c.result.maxHeroHp, enemyHp: 0, enemyMaxHp: 1, wave: 1,
-    attacks: 0, last: null, done: c.cursor === c.result.events.length, result: c.result };
+    attacks: 0, last: null, cooldowns: [], done: c.cursor === c.result.events.length, result: c.result };
   for (const e of c.result.events.slice(0, c.cursor)) {
     view.last = e; view.wave = e.wave;
     if (e.type === 'wave') { view.enemyHp = e.maxHp; view.enemyMaxHp = e.maxHp; view.attacks = 0; }
     if (e.type === 'hero') { view.enemyHp = e.enemyHp; view.attacks++; }
+    if (e.cooldowns) view.cooldowns = e.cooldowns;
     if (e.type === 'enemyHeal') view.enemyHp = e.enemyHp;
     if (e.type === 'enemy' || e.type === 'heal') view.heroHp = e.heroHp;
   }
@@ -683,4 +738,38 @@ export function unmountGem(state,id,index) {
   if (!Number.isInteger(index) || index < 0 || index >= item.sockets.length || !item.sockets[index]) throw new Error('该孔位没有宝石');
   const gem = item.sockets[index]; state.gems[`${gem.type}:${gem.tier}`]++; item.sockets[index] = null;
   return gem;
+}
+
+export function skillPoints(state) {
+  const spent = SKILLS.reduce((sum,s)=>{const level=state.skills[s.id];return sum+level*(level+1)/2;},0)-1;
+  return 2 + state.bestStage - spent;
+}
+export function learnSkill(state,id) {
+  gemGuard(state);
+  const definition = SKILLS.find(s=>s.id===id);
+  if (!definition) throw new Error('技能不存在');
+  if (state.bestStage<definition.unlock) throw new Error(`通关主线第 ${definition.unlock} 关后解锁`);
+  if (definition.prerequisite && state.skills[definition.prerequisite]<definition.required) throw new Error('请先提升前置技能');
+  const level=state.skills[id];
+  if (level>=3) throw new Error('技能已满级');
+  if (skillPoints(state)<level+1) throw new Error(`技能点不足，需要 ${level+1} 点`);
+  state.skills[id]++;
+}
+export function assignSkill(state,loadout,slot,id) {
+  gemGuard(state);
+  if (![0,1].includes(loadout) || !Number.isInteger(slot) || slot<0 || slot>2) throw new Error('技能栏无效');
+  if (id!==null && (!SKILLS.some(s=>s.id===id) || !state.skills[id])) throw new Error('请先学习该技能');
+  if (id!==null && state.skillLoadouts[loadout].some((value,index)=>value===id&&index!==slot)) throw new Error('同一方案不能重复装配技能');
+  state.skillLoadouts[loadout][slot]=id;
+}
+export function activateLoadout(state,index) {
+  gemGuard(state);
+  if (![0,1].includes(index)) throw new Error('技能方案不存在');
+  state.activeLoadout=index;
+}
+export function resetSkills(state) {
+  gemGuard(state);
+  if (skillPoints(state) === 2+state.bestStage) throw new Error('没有可返还的技能点');
+  if (state.gold<100) throw new Error('重置需要 100 金币');
+  state.gold-=100;state.skills=initialSkills();state.skillLoadouts=[['slash',null,null],['slash',null,null]];state.activeLoadout=0;
 }

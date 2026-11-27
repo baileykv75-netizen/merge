@@ -9,6 +9,7 @@ import {
   findItem, baseRange, forgeQuote, rollForge, resolveForge, compareItem, transferQuote, transferEnhancement,
   DUNGEONS, DIFFICULTIES, dungeonInfo, startDungeon, sweepDungeon,
   GEM_TYPES, gemTotal, mergeGems, drillSocket, mountGem, unmountGem,
+  SKILLS, skillPoints, learnSkill, assignSkill, activateLoadout, resetSkills,
 } from './core/game-core';
 
 const { ccclass } = _decorator;
@@ -44,6 +45,8 @@ export class StarforgeGame extends Component {
   private gemTier = 1;
   private gemItemId: string | null = null;
   private gemSocket = 0;
+  private skillsOpen = false;
+  private selectedSkill = 'slash';
 
   update(dt: number) {
     const fight = this.game?.encounter;
@@ -63,7 +66,7 @@ export class StarforgeGame extends Component {
       if (!view.done) return;
       closeEncounter(this.game); this.save();
     }
-    this.tab = tab; this.bagPage = 0; this.forgeOpen = false; this.dungeonOpen = false; this.gemsOpen = false;
+    this.tab = tab; this.bagPage = 0; this.forgeOpen = false; this.dungeonOpen = false; this.gemsOpen = false; this.skillsOpen = false;
     syncTime(this.game); this.render();
   }
 
@@ -211,11 +214,11 @@ export class StarforgeGame extends Component {
     this.healthBar(100, -48, fight?.enemyHp ?? 1, fight?.enemyMaxHp ?? 1, C.red);
     const notice = !fight ? `战力 ${h.power} · 攻击 ${h.attack} · 生命 ${h.health}` : fight.done ?
       (fight.result.won ? '挑战成功！战利品已放入背包' : '挑战失败 · 强化装备后再来') :
-      event?.type === 'hero' ? `${event.skill ? '强力突刺' : '普通攻击'}：${event.damage} 伤害` :
-      event?.type === 'enemy' ? `敌人${event.ability || '反击'}：${event.damage} 伤害` : event?.type === 'heal' ? `装备恢复 ${event.amount} 生命` : event?.type === 'enemyHeal' ? `敌人恢复 ${event.amount} 生命` : '敌人出现，准备战斗';
+      event?.type === 'hero' ? `${SKILLS.find(s=>s.id===event.skill)?.name || (event.skill ? '强力突刺' : '普通攻击')}：${event.damage} 伤害` :
+      event?.type === 'enemy' ? `敌人${event.ability || '反击'}：${event.damage} 伤害` : event?.type === 'heal' ? `${event.skill ? '复苏' : '装备恢复'} +${event.amount} 生命` : event?.type === 'enemyHeal' ? `敌人恢复 ${event.amount} 生命` : event?.type === 'buff' ? `${SKILLS.find(s=>s.id===event.skill)?.name}发动` : '敌人出现，准备战斗';
     this.text(this.node, notice, 0, -83, 380, 30, 14, fight?.done ? C.gold : C.ink);
     if (fight) {
-      this.text(this.node, running ? `强力突刺：${3 - fight.attacks % 3} 次攻击后释放 · 自动战斗中` :
+      this.text(this.node, running ? (fight.cooldowns.length ? fight.cooldowns.map((c:any)=>`${SKILLS.find(s=>s.id===c.id)?.name} ${c.remaining ? c.remaining+'次行动' : '就绪'}`).join(' · ') : '自动战斗 · 技能独立冷却') :
         (fight.result.rewards.gems?.length ? fight.result.rewards.gems.map((g: any) => `${GEM_TYPES.find(t=>t.id===g.type)?.name} Lv.${g.tier} ×${g.count}`).join('、') : `金币 +${fight.result.rewards.gold} · 铁矿 +${fight.result.rewards.ore} · 装备 +${fight.result.rewards.items.length}\n重铸石 +${fight.result.rewards.shards || 0} · 洗练尘 +${fight.result.rewards.dust || 0}`),
         0, -135, 390, 42, 14, C.muted);
       if (running) {
@@ -416,8 +419,10 @@ export class StarforgeGame extends Component {
   }
 
   private renderCamp() {
+    if (this.skillsOpen) { this.renderSkills(); return; }
     const reward = idleReward(this.game);
-    this.text(this.node, '营地 · 补给与训练', 0, 292, 390, 34, 21, C.gold);
+    this.text(this.node, '营地 · 补给与训练', -55, 292, 280, 34, 21, C.gold);
+    this.button('技能',150,292,90,38,()=>{this.skillsOpen=true;this.render();});
     this.text(this.node, '体力每 5 分钟恢复 1 点，上限 30\n离线收益最多积累 8 小时', 0, 245, 390, 52, 14, C.muted);
     this.button(`领取收益：${reward.gold} 金币 / ${reward.ore} 铁矿`, 0, 191, 380, 42,
       () => this.action(() => { const r = claimIdle(this.game); this.status = `已领取 ${r.gold} 金币、${r.ore} 铁矿`; }), true);
@@ -433,6 +438,26 @@ export class StarforgeGame extends Component {
         () => this.action(() => { claimDaily(this.game, t.id); this.status = '委托奖励已领取'; }), !claimed && this.game.daily[t.id] >= t.target);
     });
     this.text(this.node, this.status, 0, -294, 385, 54, 14, C.muted);
+  }
+
+  private renderSkills() {
+    const skill = SKILLS.find(s=>s.id===this.selectedSkill)!;
+    const level = this.game.skills[skill.id], active = this.game.activeLoadout;
+    this.text(this.node, `技能研习 · 剩余 ${skillPoints(this.game)} 点`,0,294,390,40,22,C.gold);
+    for(let i=0;i<2;i++)this.button(`方案 ${i+1}${active===i?' · 使用中':''}`,-98+i*196,245,184,38,()=>this.action(()=>{activateLoadout(this.game,i);this.status=`已切换到方案 ${i+1}`;}),active===i);
+    SKILLS.forEach((s,i)=>this.button(`${s.name} Lv.${this.game.skills[s.id]}\n${this.game.bestStage<s.unlock?'主线 '+s.unlock+' 关解锁':'冷却 '+s.cooldown+' 次行动'}`,-98+i%2*196,189-Math.floor(i/2)*57,184,50,()=>{this.selectedSkill=s.id;this.render();},s.id===this.selectedSkill));
+    this.text(this.node, `${skill.name}：${skill.description}`,0,11,390,62,14,C.cyan);
+    this.text(this.node, `升级消耗 ${level+1} 技能点${skill.prerequisite ? ` · 前置：${SKILLS.find(s=>s.id===skill.prerequisite)?.name} Lv.${skill.required}` : ''}\n每首次通关一个主线关卡获得 1 点`,0,-45,390,48,13,C.muted);
+    this.button(level===3?'技能已满级':level?'升级技能':'学习技能',0,-96,260,42,()=>this.action(()=>{learnSkill(this.game,skill.id);this.status=`${skill.name}提升至 Lv.${this.game.skills[skill.id]}`;}),true);
+    this.game.skillLoadouts[active].forEach((id:any,i:number)=>this.button(`${i+1}：${SKILLS.find(s=>s.id===id)?.name || '空位'}`,-126+i*126,-150,116,44,()=>this.action(()=>{assignSkill(this.game,active,i,skill.id);this.status=`${skill.name}装入第 ${i+1} 格`; }))); 
+    this.button('从当前方案卸下所选技能',0,-204,340,40,()=>this.action(()=>{
+      const slot=this.game.skillLoadouts[active].indexOf(skill.id);
+      if(slot<0)throw new Error('当前方案未装配此技能');
+      assignSkill(this.game,active,slot,null);this.status='技能已卸下，可选择其他技能装入';
+    }));
+    this.button('返回营地',-98,-258,184,40,()=>{this.skillsOpen=false;this.render();});
+    this.button('重置全部 · 100 金币',98,-258,184,40,()=>this.action(()=>{resetSkills(this.game);this.status='技能点已全部返还，两个方案恢复初始状态';}));
+    this.text(this.node,this.status,0,-308,390,44,12,C.muted);
   }
 
   private renderSynthesis() {
